@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ site_name }}{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Montserrat:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css?v=pdc-theme-1">
+</head>
+<body>
+  <div class="wrap">
+    <header class="site-header">
+      <a class="brand" href="/">PDC <span>Funding</span></a>
+      <nav class="nav">
+        <a href="/">Proposals</a>
+        <a href="/about">About</a>
+        {% if user %}
+          <a href="/proposals/new">New proposal</a>
+          <span class="pill">{{ user.username }}{% if user.is_admin %} · admin{% endif %}</span>
+          <form action="/logout" method="post" style="display:inline">
+            <button class="linkish" type="submit">Log out</button>
+          </form>
+        {% else %}
+          <a href="/login">Log in</a>
+          <a href="/register">Register</a>
+        {% endif %}
+      </nav>
+    </header>
+
+    {% if flash %}
+      <div class="flash {{ flash.kind }}">{{ flash.message }}</div>
+    {% endif %}
+
+    {% block body %}{% endblock %}
+
+    <footer class="site-footer">
+      Community crowdfunding for Privacy Data Coin.
+      Escrow wallet: {% if wallet_enabled %}live RPC{% else %}dry-run{% endif %}.
+      {% if pdc_usd %}PDC ≈ ${{ '%.4f'|format(pdc_usd) }}{% if price_source %} ({{ price_source }}){% endif %}.{% endif %}
+    </footer>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

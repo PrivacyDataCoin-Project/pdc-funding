@@ -1,0 +1,13 @@
+#!/bin/sh
+# Strip agent/tool trailers; keep message body clean for ArqTras commits.
+msgfile="$1"
+tmp="${msgfile}.strip"
+# Portable: no GNU sed -i
+sed \
+  -e '/^Co-authored-by:/Id' \
+  -e '/^Signed-off-by:/Id' \
+  -e '/^Made-with:/Id' \
+  -e '/Cursor/Id' \
+  -e '/cursoragent/Id' \
+  "$msgfile" > "$tmp" && mv "$tmp" "$msgfile"
+exit 0

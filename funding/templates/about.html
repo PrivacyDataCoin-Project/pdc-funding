@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}About · {{ site_name }}{% endblock %}
+{% block body %}
+<section class="panel">
+  <h1>How funding works</h1>
+  <p class="lede">
+    Same idea as classic CryptoNote community FFS: propose work, raise PDC into escrow,
+    deliver milestones, receive payouts. Wallet layer follows the PDC tipbot pattern
+    (integrated addresses + payment_id) — not Monero subaccounts.
+  </p>
+
+  <div class="grid-2">
+    <div class="content-body">
+      <h3>Flow</h3>
+      <ol>
+        <li><strong>Proposal</strong> — author submits scope, target, milestones.</li>
+        <li><strong>Funding</strong> — admin opens funding; donors send PDC to the proposal’s integrated address.</li>
+        <li><strong>WIP</strong> — work proceeds; comments track updates.</li>
+        <li><strong>Payout</strong> — admin releases escrow to the author’s address per milestone.</li>
+        <li><strong>Completed</strong> — archive for the community.</li>
+      </ol>
+      <h3>Trust model</h3>
+      <p>
+        Escrow is custodial (operator hot wallet). Prefer a thin wallet and clear admin accountability.
+        Prices come from Trade <code>/api/prices/usd</code> (oracle when enabled).
+      </p>
+    </div>
+    <aside>
+      <div class="aside-block">
+        <h3>API</h3>
+        <p class="stat-sub"><a href="/api/v1/proposals">GET /api/v1/proposals</a></p>
+        <p class="stat-sub"><a href="/api/v1/health">GET /api/v1/health</a></p>
+      </div>
+    </aside>
+  </div>
+</section>
+{% endblock %}

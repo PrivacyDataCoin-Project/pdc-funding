@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}New proposal · {{ site_name }}{% endblock %}
+{% block body %}
+<section class="panel">
+  <h1>New proposal</h1>
+  <p class="lede">Describe the work, cost in PDC, and milestones. An admin moves it to funding when ready.</p>
+  <form method="post" action="/proposals/new">
+    <label for="headline">Headline</label>
+    <input id="headline" name="headline" required maxlength="200">
+
+    <label for="category">Category</label>
+    <select id="category" name="category" required>
+      {% for c in categories %}
+        <option value="{{ c }}">{{ c }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="funds_target">Funding target (PDC)</label>
+    <input id="funds_target" name="funds_target" required placeholder="100.5">
+
+    <label for="payout_address">Payout address or @alias (optional)</label>
+    <input id="payout_address" name="payout_address" placeholder="@you or standard address">
+
+    <label for="content">Proposal</label>
+    <textarea id="content" name="content" required>{{ default_content }}</textarea>
+
+    <button class="btn" type="submit">Submit proposal</button>
+  </form>
+</section>
+{% endblock %}

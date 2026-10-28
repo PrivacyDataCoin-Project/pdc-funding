@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{% if mode == 'register' %}Register{% else %}Log in{% endif %} · {{ site_name }}{% endblock %}
+{% block body %}
+<section class="auth-box panel">
+  <h1>{% if mode == 'register' %}Create account{% else %}Log in{% endif %}</h1>
+  <form method="post" action="{% if mode == 'register' %}/register{% else %}/login{% endif %}">
+    <label for="username">Username</label>
+    <input id="username" name="username" required autocomplete="username">
+    {% if mode == 'register' %}
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" required autocomplete="email">
+    {% endif %}
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" required autocomplete="{% if mode == 'register' %}new-password{% else %}current-password{% endif %}">
+    <button class="btn" type="submit">{% if mode == 'register' %}Register{% else %}Log in{% endif %}</button>
+  </form>
+  <p class="stat-sub" style="margin-top:1rem">
+    {% if mode == 'register' %}
+      Already have an account? <a href="/login">Log in</a>
+    {% else %}
+      Need an account? <a href="/register">Register</a>
+    {% endif %}
+  </p>
+</section>
+{% endblock %}

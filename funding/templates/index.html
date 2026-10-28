@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Proposals · {{ site_name }}{% endblock %}
+{% block body %}
+<section class="hero">
+  <p class="kicker">Community crowdfunding</p>
+  <h1>Fund the work that moves <em>PDC</em> forward.</h1>
+  <p>
+    Community proposals, transparent escrow, milestone payouts.
+    Donate to an integrated address; admins release funds when milestones land.
+  </p>
+  <div class="meta-row">
+    <span class="pill {% if wallet_enabled %}live{% endif %}">
+      {% if wallet_enabled %}wallet connected{% else %}dry-run mode{% endif %}
+    </span>
+    {% if pdc_usd %}
+      <span class="pill">1 PDC ≈ ${{ '%.4f'|format(pdc_usd) }}</span>
+    {% endif %}
+  </div>
+</section>
+
+<div class="filters">
+  <a href="/" class="{% if status_filter is none and not cat_filter %}active{% endif %}">All</a>
+  {% for code, label in statuses.items() if code != 0 %}
+    <a href="/?status_filter={{ code }}" class="{% if status_filter == code %}active{% endif %}">{{ label }}</a>
+  {% endfor %}
+  {% for c in categories %}
+    <a href="/?cat={{ c }}" class="{% if cat_filter == c %}active{% endif %}">{{ c }}</a>
+  {% endfor %}
+</div>
+
+<div class="proposal-list">
+  {% for p in proposals %}
+    <article class="proposal-row">
+      <div>
+        <div class="status s{{ p.status }}">{{ statuses.get(p.status, p.status) }}</div>
+        <h2><a href="/proposals/{{ p.id }}">{{ p.headline }}</a></h2>
+        <div class="row-meta">{{ p.category }} · by {{ p.author }} · target {{ p.funds_target_atomic|pdc }} PDC</div>
+        <div class="bar" data-pct="{{ p.received_atomic|pct(p.funds_target_atomic) }}"><i></i></div>
+      </div>
+      <div class="row-stats">
+        <div class="pct">{{ p.received_atomic|pct(p.funds_target_atomic) }}%</div>
+        <div class="amt">{{ p.received_atomic|pdc }} / {{ p.funds_target_atomic|pdc }} PDC</div>
+      </div>
+    </article>
+  {% else %}
+    <p class="lede">No proposals yet. {% if user %}<a href="/proposals/new">Submit the first one</a>.{% else %}<a href="/register">Register</a> to propose.{% endif %}</p>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ proposal.headline }} · {{ site_name }}{% endblock %}
+{% block body %}
+<section class="panel">
+  <div class="status s{{ proposal.status }}">{{ statuses.get(proposal.status) }} · {{ proposal.category }}</div>
+  <h1>{{ proposal.headline }}</h1>
+  <p class="lede">by {{ proposal.author }} · target {{ progress.target_atomic|pdc }} PDC{% if target_usd %} (≈ ${{ '%.2f'|format(target_usd) }}){% endif %}</p>
+
+  <div class="grid-2">
+    <div>
+      <div class="content-body">{{ content_html | safe }}</div>
+
+      <div class="comments" style="margin-top:2.5rem">
+        <h3 style="font-family:var(--font-display)">Discussion</h3>
+        {% for c in comments %}
+          <article>
+            <div class="who">{{ c.author }} · {{ c.created_at }}</div>
+            <div>{{ c.message }}</div>
+          </article>
+        {% else %}
+          <p class="stat-sub">No comments yet.</p>
+        {% endfor %}
+        {% if user %}
+          <form method="post" action="/proposals/{{ proposal.id }}/comment" style="margin-top:1rem">
+            <label for="message">Add comment</label>
+            <textarea id="message" name="message" required style="min-height:6rem"></textarea>
+            <button class="btn" type="submit">Post</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+
+    <aside>
+      <div class="aside-block">
+        <h3>Progress</h3>
+        <p class="stat-big">{{ '%.1f'|format(progress.pct) }}%</p>
+        <p class="stat-sub">
+          {{ progress.received_atomic|pdc }} received
+          {% if received_usd %}(≈ ${{ '%.2f'|format(received_usd) }}){% endif %}
+          · {{ progress.available_atomic|pdc }} available
+          · {{ progress.paid_atomic|pdc }} paid
+        </p>
+        <div class="bar" data-pct="{{ '%.1f'|format(progress.pct) }}" style="margin-top:0.75rem"><i></i></div>
+      </div>
+
+      {% if proposal.integrated_address and proposal.status >= 2 %}
+      <div class="aside-block">
+        <h3>Donate</h3>
+        <div class="addr" id="donate-addr">{{ proposal.integrated_address }}</div>
+        <button class="btn ghost" type="button" data-copy="#donate-addr">Copy</button>
+        <p class="stat-sub" style="margin-top:0.5rem">Send only PDC native asset to this integrated address.</p>
+      </div>
+      {% endif %}
+
+      {% if deposits %}
+      <div class="aside-block">
+        <h3>Donations</h3>
+        <ul class="tx-list">
+          {% for d in deposits %}
+            <li>
+              <span>+{{ d.amount_atomic|pdc }}</span>
+              <a href="{{ explorer_tx_url }}{{ d.tx_hash }}" target="_blank" rel="noopener">{{ d.tx_hash[:10] }}…</a>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      {% if payouts %}
+      <div class="aside-block">
+        <h3>Payouts</h3>
+        <ul class="tx-list">
+          {% for o in payouts %}
+            <li>
+              <span>−{{ o.amount_atomic|pdc }}</span>
+              <a href="{{ explorer_tx_url }}{{ o.tx_hash }}" target="_blank" rel="noopener">{{ o.tx_hash[:10] }}…</a>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      {% if user and user.is_admin %}
+      <div class="aside-block">
+        <h3>Admin</h3>
+        <form method="post" action="/proposals/{{ proposal.id }}/status">
+          <label for="new_status">Set status</label>
+          <select id="new_status" name="new_status">
+            {% for code, label in statuses.items() %}
+              <option value="{{ code }}" {% if code == proposal.status %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn ghost" type="submit">Update status</button>
+        </form>
+        <form method="post" action="/proposals/{{ proposal.id }}/payout" style="margin-top:1rem">
+          <label for="amount">Milestone payout (PDC)</label>
+          <input id="amount" name="amount" required placeholder="10">
+          <label for="to_address">To address / @alias</label>
+          <input id="to_address" name="to_address" value="{{ proposal.payout_address }}" placeholder="defaults to proposal payout address">
+          <label for="milestone_note">Note</label>
+          <input id="milestone_note" name="milestone_note" placeholder="Milestone 1">
+          <button class="btn" type="submit">Pay out</button>
+        </form>
+      </div>
+      {% endif %}
+    </aside>
+  </div>
+</section>
+{% endblock %}
