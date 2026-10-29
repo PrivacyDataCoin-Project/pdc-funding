@@ -35,7 +35,9 @@ class PriceBook:
 def fetch_prices(settings: Settings, *, force: bool = False) -> Optional[PriceBook]:
     global _CACHE, _CACHE_AT
     now = time.time()
-    if not force and _CACHE is not None and (now - _CACHE_AT) < _TTL_SEC:
+    # Success and failure both stamp _CACHE_AT so a dead Trade endpoint
+    # cannot block every page render for the HTTP timeout.
+    if not force and _CACHE_AT and (now - _CACHE_AT) < _TTL_SEC:
         return _CACHE
     try:
         resp = requests.get(settings.prices_usd_url, timeout=20)
@@ -43,11 +45,13 @@ def fetch_prices(settings: Settings, *, force: bool = False) -> Optional[PriceBo
         data: Any = resp.json()
     except (requests.RequestException, ValueError) as exc:
         logger.warning("prices fetch failed: %s", exc)
+        _CACHE_AT = now
         return _CACHE
 
     raw_prices = data.get("prices") if isinstance(data, dict) else None
     if not isinstance(raw_prices, dict):
         logger.warning("prices response missing prices map")
+        _CACHE_AT = now
         return _CACHE
 
     prices: dict[str, float] = {}

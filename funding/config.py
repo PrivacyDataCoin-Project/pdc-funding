@@ -99,6 +99,16 @@ class Settings:
         default_factory=lambda: _env("BOOTSTRAP_ADMIN_EMAIL", "admin@localhost")
     )
 
+    def __post_init__(self) -> None:
+        if self.bind_port < 1 or self.bind_port > 65535:
+            raise ValueError("BIND_PORT must be between 1 and 65535")
+        if self.transfer_fee_atomic < 0:
+            raise ValueError("TRANSFER_FEE_ATOMIC must be >= 0")
+        if self.deposit_min_confirmations < 0:
+            raise ValueError("DEPOSIT_MIN_CONFIRMATIONS must be >= 0")
+        if self.deposit_scan_interval_sec <= 0:
+            raise ValueError("DEPOSIT_SCAN_INTERVAL_SEC must be > 0")
+
     @property
     def wallet_enabled(self) -> bool:
         return bool(self.wallet_rpc_url)

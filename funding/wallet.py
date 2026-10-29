@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -15,7 +16,41 @@ logger = logging.getLogger("pdc-funding.wallet")
 
 
 class WalletError(RuntimeError):
-    pass
+    """Wallet RPC outcome is unknown, or the call never reached transfer."""
+
+
+class WalletRejected(WalletError):
+    """Node or wallet rejected the call. A transfer was not broadcast."""
+
+
+# Zano / CryptoNote: unlock_time below this is a block height; otherwise a unix time.
+CRYPTONOTE_MAX_BLOCK_NUMBER = 500_000_000
+
+
+def payment_is_unlocked(unlock_time: int, height: int, *, now: Optional[int] = None) -> bool:
+    """Match Zano spend-time rules. height is chain size from daemon getinfo."""
+    if unlock_time <= 0:
+        return True
+    if unlock_time < CRYPTONOTE_MAX_BLOCK_NUMBER:
+        if height <= 0:
+            return False
+        return height >= unlock_time
+    current = int(time.time() if now is None else now)
+    return current >= unlock_time
+
+
+def parse_chain_height(data: Any) -> int:
+    """Read daemon getinfo height. Accepts a bare object or a JSON-RPC envelope."""
+    if not isinstance(data, dict):
+        return 0
+    body = data.get("result") if isinstance(data.get("result"), dict) else data
+    if not isinstance(body, dict):
+        return 0
+    try:
+        height = int(body.get("height") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return height if height > 0 else 0
 
 
 @dataclass
@@ -25,6 +60,7 @@ class Payment:
     amount: int
     block_height: int
     unlock_time: int = 0
+    asset_id: str = ""
 
 
 class WalletClient:
@@ -59,9 +95,13 @@ class WalletClient:
             data = resp.json()
         except requests.RequestException as exc:
             raise WalletError(f"wallet RPC transport error: {exc}") from exc
+        if not isinstance(data, dict):
+            raise WalletError("wallet RPC returned a non-object body")
         if data.get("error"):
             err = data["error"]
-            raise WalletError(f"{err.get('code')}: {err.get('message')}")
+            message = err.get("message") if isinstance(err, dict) else err
+            code = err.get("code") if isinstance(err, dict) else ""
+            raise WalletRejected(f"{code}: {message}")
         return data.get("result")
 
     def get_address(self) -> str:
@@ -101,12 +141,12 @@ class WalletClient:
             data = resp.json()
         except requests.RequestException as exc:
             raise WalletError(f"alias resolve failed: {exc}") from exc
-        if data.get("error"):
-            raise WalletError(f"alias @{alias} not found")
+        if not isinstance(data, dict) or data.get("error"):
+            raise WalletRejected(f"alias @{alias} not found")
         details = (data.get("result") or {}).get("alias_details") or {}
         address = str(details.get("address") or "")
         if not address:
-            raise WalletError(f"alias @{alias} has no address")
+            raise WalletRejected(f"alias @{alias} has no address")
         return address
 
     def transfer(self, address: str, amount_atomic: int, comment: str = "") -> str:
@@ -131,7 +171,13 @@ class WalletClient:
         if comment:
             params["comment"] = comment
         result = self._call("transfer", params)
-        return str(result["tx_hash"])
+        tx_hash = ""
+        if isinstance(result, dict) and result.get("tx_hash"):
+            tx_hash = str(result["tx_hash"]).strip()
+        if not tx_hash:
+            # The node may already have broadcast. Callers must not retry blindly.
+            raise WalletError("wallet response missing tx_hash")
+        return tx_hash
 
     def get_bulk_payments(
         self,
@@ -152,16 +198,37 @@ class WalletClient:
                 "allow_locked_transactions": bool(allow_locked),
             },
         )
+        if not isinstance(result, dict):
+            return []
+        raw_payments = result.get("payments") or []
+        if not isinstance(raw_payments, list):
+            return []
         best: dict[tuple[str, str], Payment] = {}
-        for item in result.get("payments", []) or []:
+        for item in raw_payments:
+            if not isinstance(item, dict):
+                continue
+            try:
+                pid = str(item["payment_id"]).strip().lower()
+                tx_hash = str(item["tx_hash"]).strip()
+                amount = int(item.get("amount", 0))
+                block_height = int(item.get("block_height", 0) or 0)
+                unlock_time = int(item.get("unlock_time", 0) or 0)
+            except (KeyError, TypeError, ValueError):
+                logger.warning("skipping malformed payment record")
+                continue
+            if not pid or not tx_hash or amount <= 0:
+                continue
+            raw_asset = item.get("asset_id")
+            asset_id = str(raw_asset).strip().lower() if raw_asset else ""
             pay = Payment(
-                payment_id=str(item["payment_id"]).lower(),
-                tx_hash=str(item["tx_hash"]),
-                amount=int(item.get("amount", 0)),
-                block_height=int(item.get("block_height", 0) or 0),
-                unlock_time=int(item.get("unlock_time", 0) or 0),
+                payment_id=pid,
+                tx_hash=tx_hash,
+                amount=amount,
+                block_height=block_height,
+                unlock_time=unlock_time,
+                asset_id=asset_id,
             )
-            key = (pay.tx_hash, pay.payment_id)
+            key = (pay.tx_hash.lower(), pay.payment_id)
             prev = best.get(key)
             if prev is None or pay.block_height > prev.block_height:
                 best[key] = pay
@@ -179,8 +246,7 @@ class WalletClient:
         try:
             resp = self._session.get(url, timeout=20)
             resp.raise_for_status()
-            data = resp.json()
-            return int(data.get("height") or 0)
+            return parse_chain_height(resp.json())
         except (requests.RequestException, ValueError, TypeError) as exc:
             logger.warning("daemon getinfo height failed: %s", exc)
             return 0

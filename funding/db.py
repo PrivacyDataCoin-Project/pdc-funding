@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import re
+import secrets
 import sqlite3
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
+
+_HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
+_MAX_ATOMIC = 2**63 - 1
+
+
+def normalize_tx_hash(tx_hash: str) -> str:
+    raw = (tx_hash or "").strip()
+    if _HEX_RE.fullmatch(raw):
+        return raw.lower()
+    return raw
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -148,9 +160,13 @@ class Database:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path, check_same_thread=False)
+        conn = sqlite3.connect(self.path, check_same_thread=False, timeout=5)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA journal_mode = WAL")
+        if conn.in_transaction:
+            conn.commit()
         try:
             yield conn
             conn.commit()
@@ -172,8 +188,14 @@ class Database:
         password_hash: str,
         *,
         is_admin: bool = False,
+        promote_if_first: bool = False,
     ) -> User:
         with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if promote_if_first and not is_admin:
+                row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
+                if int(row["c"]) == 0:
+                    is_admin = True
             cur = conn.execute(
                 "INSERT INTO users (username, email, password_hash, is_admin) "
                 "VALUES (?, ?, ?, ?)",
@@ -183,7 +205,10 @@ class Database:
 
     def get_user(self, user_id: int) -> Optional[User]:
         with self._lock, self._connect() as conn:
-            return self._user_from_id(conn, user_id)
+            row = conn.execute(
+                "SELECT * FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+            return self._row_user(row) if row else None
 
     def get_user_by_username(self, username: str) -> Optional[User]:
         with self._lock, self._connect() as conn:
@@ -230,6 +255,25 @@ class Database:
                 "updated_at = datetime('now') WHERE id = ?",
                 (payment_id.lower(), integrated_address, proposal_id),
             )
+
+    def set_donation_address_if_empty(
+        self, proposal_id: int, payment_id: str, integrated_address: str
+    ) -> bool:
+        """Assign an address once. A lost race leaves the winning row in place."""
+        pid = (payment_id or "").strip().lower()
+        addr = (integrated_address or "").strip()
+        if not pid or not addr:
+            raise ValueError("payment_id and integrated address required")
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE proposals SET payment_id = ?, integrated_address = ?, "
+                "updated_at = datetime('now') "
+                "WHERE id = ? AND (payment_id IS NULL OR payment_id = '' "
+                "OR integrated_address IS NULL OR integrated_address = '')",
+                (pid, addr, proposal_id),
+            )
+            return cur.rowcount == 1
 
     def update_proposal_status(self, proposal_id: int, status: int) -> None:
         with self._lock, self._connect() as conn:
@@ -292,7 +336,23 @@ class Database:
         block_height: int,
     ) -> bool:
         """Insert deposit if new. Returns True when credited."""
+        tx_norm = normalize_tx_hash(tx_hash)
+        pid = (payment_id or "").strip().lower()
+        if (
+            not tx_norm
+            or not pid
+            or amount_atomic <= 0
+            or amount_atomic > _MAX_ATOMIC
+        ):
+            return False
         with self._lock, self._connect() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM deposits WHERE lower(tx_hash) = lower(?) "
+                "AND lower(payment_id) = lower(?)",
+                (tx_norm, pid),
+            ).fetchone()
+            if existing:
+                return False
             try:
                 conn.execute(
                     "INSERT INTO deposits "
@@ -300,8 +360,8 @@ class Database:
                     "VALUES (?, ?, ?, ?, ?)",
                     (
                         proposal_id,
-                        payment_id.lower(),
-                        tx_hash,
+                        pid,
+                        tx_norm,
                         amount_atomic,
                         block_height,
                     ),
@@ -328,6 +388,94 @@ class Database:
                 )
                 for r in rows
             ]
+
+    def reserve_payout(
+        self,
+        *,
+        proposal_id: int,
+        amount_atomic: int,
+        to_address: str,
+        milestone_note: str,
+        created_by: Optional[int],
+    ) -> int:
+        """Insert a pending payout under a write lock. Raises ValueError if insolvent."""
+        if amount_atomic <= 0 or amount_atomic > _MAX_ATOMIC:
+            raise ValueError("amount must be positive")
+        dest = (to_address or "").strip()
+        if not dest:
+            raise ValueError("payout address required")
+        pending = f"pending:{secrets.token_hex(16)}"
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status FROM proposals WHERE id = ?", (proposal_id,)
+            ).fetchone()
+            if not row:
+                raise KeyError("proposal not found")
+            if int(row["status"]) not in (2, 3, 4):
+                raise ValueError("proposal must be funding/wip/completed to pay out")
+            received = conn.execute(
+                "SELECT COALESCE(SUM(amount_atomic), 0) AS s FROM deposits "
+                "WHERE proposal_id = ?",
+                (proposal_id,),
+            ).fetchone()
+            paid = conn.execute(
+                "SELECT COALESCE(SUM(amount_atomic), 0) AS s FROM payouts "
+                "WHERE proposal_id = ?",
+                (proposal_id,),
+            ).fetchone()
+            available = int(received["s"]) - int(paid["s"])
+            if amount_atomic > available:
+                raise ValueError("amount exceeds available escrow balance")
+            cur = conn.execute(
+                "INSERT INTO payouts "
+                "(proposal_id, amount_atomic, to_address, tx_hash, milestone_note, created_by) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    proposal_id,
+                    amount_atomic,
+                    dest,
+                    pending,
+                    milestone_note,
+                    created_by,
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def release_payout(self, payout_id: int) -> bool:
+        """Drop a reservation that was never broadcast. Returns True when deleted."""
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "DELETE FROM payouts WHERE id = ? AND tx_hash LIKE 'pending:%'",
+                (payout_id,),
+            )
+            return cur.rowcount == 1
+
+    def finalize_payout(self, payout_id: int, tx_hash: str) -> Payout:
+        norm = normalize_tx_hash(tx_hash)
+        if not norm or norm.startswith("pending:"):
+            raise RuntimeError("refusing to finalize payout without a tx hash")
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE payouts SET tx_hash = ? WHERE id = ? AND tx_hash LIKE 'pending:%'",
+                (norm, payout_id),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError(f"payout reservation {payout_id} missing")
+            row = conn.execute(
+                "SELECT * FROM payouts WHERE id = ?", (payout_id,)
+            ).fetchone()
+            return Payout(
+                id=int(row["id"]),
+                proposal_id=int(row["proposal_id"]),
+                amount_atomic=int(row["amount_atomic"]),
+                to_address=str(row["to_address"]),
+                tx_hash=str(row["tx_hash"]),
+                milestone_note=str(row["milestone_note"]),
+                created_at=str(row["created_at"]),
+            )
 
     def add_payout(
         self,

@@ -11,11 +11,19 @@ import bcrypt
 from funding.amounts import funding_pct, parse_amount
 from funding.config import CATEGORIES, STATUSES, Settings
 from funding.db import Comment, Database, Proposal, User
-from funding.wallet import WalletClient, WalletError
+from funding.wallet import WalletClient, WalletError, WalletRejected
 
 logger = logging.getLogger("pdc-funding.service")
 
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,20}$")
+_BCRYPT_MAX_BYTES = 72
+_MAX_CONTENT_CHARS = 100_000
+_MAX_NOTE_CHARS = 4_000
+_MAX_ADDRESS_CHARS = 1_024
+# Checked when the username does not exist so missing users are not faster.
+_DUMMY_PASSWORD_HASH = bcrypt.hashpw(
+    b"pdc-funding-dummy", bcrypt.gensalt()
+).decode("utf-8")
 PROPOSAL_TEMPLATE = """#### Why?
 
 What problem(s) are you trying to solve?
@@ -94,17 +102,20 @@ class FundingService:
             raise ValueError("invalid email")
         if len(password or "") < 8:
             raise ValueError("password must be at least 8 characters")
-        is_admin = force_admin or self.db.user_count() == 0
+        if len((password or "").encode("utf-8")) > _BCRYPT_MAX_BYTES:
+            raise ValueError("password must be at most 72 bytes")
         return self.db.create_user(
             username,
             email,
             self.hash_password(password),
-            is_admin=is_admin,
+            is_admin=bool(force_admin),
+            promote_if_first=not force_admin,
         )
 
     def authenticate(self, username: str, password: str) -> Optional[User]:
         user = self.db.get_user_by_username(username)
         if not user:
+            self.verify_password(password, _DUMMY_PASSWORD_HASH)
             return None
         if not self.verify_password(password, user.password_hash):
             return None
@@ -124,8 +135,12 @@ class FundingService:
             raise ValueError("headline required (max 200 chars)")
         if not content.strip():
             raise ValueError("content required")
+        if len(content) > _MAX_CONTENT_CHARS:
+            raise ValueError("content too long")
         if category not in CATEGORIES:
             raise ValueError(f"category must be one of: {', '.join(CATEGORIES)}")
+        if len((payout_address or "").strip()) > _MAX_ADDRESS_CHARS:
+            raise ValueError("payout address too long")
         target = parse_amount(funds_target)
         return self.db.create_proposal(
             user_id=user.id,
@@ -144,7 +159,11 @@ class FundingService:
         if proposal.status < 2:
             return proposal
         address, pid = self.wallet.make_integrated_address()
-        self.db.set_donation_address(proposal.id, pid, address)
+        if not self.db.set_donation_address_if_empty(proposal.id, pid, address):
+            refreshed = self.db.get_proposal(proposal.id)
+            if refreshed and refreshed.payment_id and refreshed.integrated_address:
+                return refreshed
+            raise RuntimeError("could not assign donation address")
         refreshed = self.db.get_proposal(proposal.id)
         if not refreshed:
             raise RuntimeError("proposal vanished after address assign")
@@ -196,35 +215,73 @@ class FundingService:
             raise KeyError("proposal not found")
         if proposal.status not in (2, 3, 4):
             raise ValueError("proposal must be funding/wip/completed to pay out")
+        note = (milestone_note or "").strip()
+        if len(note) > _MAX_NOTE_CHARS:
+            raise ValueError("note too long")
         amount_atomic = parse_amount(amount)
-        available = self.available_atomic(proposal)
-        if amount_atomic > available:
-            raise ValueError("amount exceeds available escrow balance")
         dest = (to_address or proposal.payout_address or "").strip()
         if not dest:
             raise ValueError("payout address required")
+        if len(dest) > _MAX_ADDRESS_CHARS:
+            raise ValueError("payout address too long")
+        if self.wallet.enabled:
+            try:
+                dest = self.wallet.resolve_destination(dest)
+            except WalletError as exc:
+                raise RuntimeError(str(exc)) from exc
+        payout_id = self.db.reserve_payout(
+            proposal_id=proposal.id,
+            amount_atomic=amount_atomic,
+            to_address=dest,
+            milestone_note=note,
+            created_by=actor.id,
+        )
         try:
             tx_hash = self.wallet.transfer(
                 dest,
                 amount_atomic,
-                comment=f"pdc-funding proposal #{proposal.id}: {milestone_note}"[:120],
+                comment=f"pdc-funding proposal #{proposal.id}: {note}"[:120],
             )
-        except WalletError as exc:
+        except WalletRejected as exc:
+            self._release_reservation(payout_id)
             raise RuntimeError(str(exc)) from exc
-        payout = self.db.add_payout(
-            proposal_id=proposal.id,
-            amount_atomic=amount_atomic,
-            to_address=dest,
-            tx_hash=tx_hash,
-            milestone_note=milestone_note.strip(),
-            created_by=actor.id,
-        )
+        except ValueError:
+            self._release_reservation(payout_id)
+            raise
+        except WalletError as exc:
+            logger.error(
+                "payout reservation %s kept after uncertain wallet result: %s",
+                payout_id,
+                exc,
+            )
+            raise RuntimeError(
+                f"payout may have been broadcast (reservation {payout_id}); "
+                "escrow stays reserved until an operator reconciles"
+            ) from exc
+        try:
+            payout = self.db.finalize_payout(payout_id, tx_hash)
+        except Exception as exc:
+            logger.error(
+                "payout reservation %s broadcast as %s but was not finalized",
+                payout_id,
+                tx_hash,
+            )
+            raise RuntimeError(
+                f"payout broadcast as {tx_hash} but reservation {payout_id} "
+                "was not finalized"
+            ) from exc
         return {
             "payout_id": payout.id,
             "tx_hash": payout.tx_hash,
             "amount_atomic": payout.amount_atomic,
             "to_address": payout.to_address,
         }
+
+    def _release_reservation(self, payout_id: int) -> None:
+        try:
+            self.db.release_payout(payout_id)
+        except Exception:
+            logger.exception("failed to release payout reservation %s", payout_id)
 
     def add_comment(self, user: User, proposal_id: int, message: str) -> Comment:
         if not message.strip():

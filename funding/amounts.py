@@ -5,6 +5,8 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 ATOMIC = 10**12
+# SQLite INTEGER is signed 64-bit. Larger values raise OverflowError at insert.
+_MAX_ATOMIC = 2**63 - 1
 
 
 def parse_amount(text: str) -> int:
@@ -16,11 +18,13 @@ def parse_amount(text: str) -> int:
         value = Decimal(raw)
     except InvalidOperation as exc:
         raise ValueError(f"invalid amount: {text!r}") from exc
-    if value <= 0:
+    if not value.is_finite() or value <= 0:
         raise ValueError("amount must be positive")
     atomic = (value * ATOMIC).to_integral_value(rounding=ROUND_DOWN)
     if atomic <= 0:
         raise ValueError("amount too small")
+    if atomic > _MAX_ATOMIC:
+        raise ValueError("amount too large")
     return int(atomic)
 
 
