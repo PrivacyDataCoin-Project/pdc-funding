@@ -212,6 +212,7 @@ class Database:
 
     def set_password_hash(self, user_id: int, password_hash: str) -> None:
         with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cur = conn.execute(
                 "UPDATE users SET password_hash = ? WHERE id = ?",
                 (password_hash, user_id),

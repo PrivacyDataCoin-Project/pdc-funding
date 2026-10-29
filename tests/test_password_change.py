@@ -10,21 +10,26 @@ from funding.wallet import WalletClient
 
 
 def test_change_password(tmp_path: Path):
+    db_path = tmp_path / "pw.db"
     settings = Settings(
         secret_key="test-secret",
-        database_path=tmp_path / "pw.db",
+        database_path=db_path,
         wallet_rpc_url="",
         bootstrap_admin_password="password123",
         bootstrap_admin_user="admin",
         bootstrap_admin_email="admin@example.com",
+        session_https_only=False,
     )
     app = create_app(settings)
     with TestClient(app) as client:
-        assert client.post(
+        login = client.post(
             "/login",
             data={"username": "admin", "password": "password123"},
             follow_redirects=False,
-        ).status_code == 303
+        )
+        assert login.status_code == 303
+        assert login.headers.get("location") == "/"
+
         bad = client.post(
             "/account/password",
             data={
@@ -35,6 +40,8 @@ def test_change_password(tmp_path: Path):
             follow_redirects=False,
         )
         assert bad.status_code == 303
+        assert bad.headers.get("location") == "/account/password"
+
         ok = client.post(
             "/account/password",
             data={
@@ -45,15 +52,25 @@ def test_change_password(tmp_path: Path):
             follow_redirects=False,
         )
         assert ok.status_code == 303
+        assert ok.headers.get("location") == "/"
+
         client.post("/logout", follow_redirects=False)
-        assert client.post(
+        old_login = client.post(
+            "/login",
+            data={"username": "admin", "password": "password123"},
+            follow_redirects=False,
+        )
+        assert old_login.headers.get("location") == "/login"
+        new_login = client.post(
             "/login",
             data={"username": "admin", "password": "newpass123"},
             follow_redirects=False,
-        ).status_code == 303
+        )
+        assert new_login.headers.get("location") == "/"
 
-    db = Database(settings.database_path)
+    db = Database(db_path)
     svc = FundingService(settings, db, WalletClient(settings))
     user = db.get_user_by_username("admin")
     assert user is not None
     assert svc.verify_password("newpass123", user.password_hash)
+    assert not svc.verify_password("password123", user.password_hash)
