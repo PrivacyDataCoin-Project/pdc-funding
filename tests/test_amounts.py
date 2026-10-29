@@ -9,7 +9,7 @@ def test_parse_and_format_roundtrip():
 
 
 def test_parse_rejects_bad():
-    for bad in ("", "0", "-1", "abc"):
+    for bad in ("", "0", "-1", "abc", "nan", "inf", "+inf", "1e30"):
         try:
             parse_amount(bad)
             assert False, bad

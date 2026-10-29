@@ -59,7 +59,7 @@
           {% for d in deposits %}
             <li>
               <span>+{{ d.amount_atomic|pdc }}</span>
-              <a href="{{ explorer_tx_url }}{{ d.tx_hash }}" target="_blank" rel="noopener">{{ d.tx_hash[:10] }}…</a>
+              <a href="{{ explorer_tx_url }}{{ d.tx_hash }}" target="_blank" rel="noopener noreferrer">{{ d.tx_hash[:10] }}…</a>
             </li>
           {% endfor %}
         </ul>
@@ -73,7 +73,11 @@
           {% for o in payouts %}
             <li>
               <span>−{{ o.amount_atomic|pdc }}</span>
-              <a href="{{ explorer_tx_url }}{{ o.tx_hash }}" target="_blank" rel="noopener">{{ o.tx_hash[:10] }}…</a>
+              {% if o.tx_hash.startswith('pending:') %}
+                <span>pending</span>
+              {% else %}
+                <a href="{{ explorer_tx_url }}{{ o.tx_hash }}" target="_blank" rel="noopener noreferrer">{{ o.tx_hash[:10] }}…</a>
+              {% endif %}
             </li>
           {% endfor %}
         </ul>

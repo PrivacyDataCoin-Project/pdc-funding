@@ -48,6 +48,15 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     app.add_middleware(
         SessionMiddleware, secret_key=settings.secret_key, same_site="lax"
     )
+
+    @app.middleware("http")
+    async def add_security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+        return response
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
     templates.env.filters["pdc"] = format_amount
@@ -62,10 +71,18 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     app.state.scanner = scanner
 
     def current_user(request: Request) -> Optional[User]:
-        uid = request.session.get("user_id")
-        if not uid:
+        raw = request.session.get("user_id")
+        if not raw:
             return None
-        return db.get_user(int(uid))
+        try:
+            uid = int(raw)
+        except (TypeError, ValueError):
+            request.session.pop("user_id", None)
+            return None
+        user = db.get_user(uid)
+        if user is None:
+            request.session.pop("user_id", None)
+        return user
 
     def base_ctx(request: Request, **extra: Any) -> dict[str, Any]:
         book = fetch_prices(settings)

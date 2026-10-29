@@ -59,6 +59,13 @@ Keep escrow thin; store surplus cold. Operator keys = custodial trust.
 - Session cookies + bcrypt passwords
 - Change `SECRET_KEY` and bootstrap admin password before any public deploy
 - Never commit `.env`, wallet files, or seeds
+- Architecture, findings, and reconcile steps: [docs/architecture.md](docs/architecture.md), [docs/security-audit.md](docs/security-audit.md)
+
+Deposits are credited only after `DEPOSIT_MIN_CONFIRMATIONS` against daemon `getinfo` height (chain size). If that height is unknown, nothing is credited.
+
+A milestone payout is reserved in SQLite before the wallet RPC call. An uncertain RPC result keeps the reservation so the same balance cannot be sent twice. Pending rows show as `pending` in the UI until an operator reconciles them (see the audit doc).
+
+The first live deposit scan after upgrade resets the scan watermark once. Credits stay idempotent on `(tx_hash, payment_id)`.
 
 ## License
 
