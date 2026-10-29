@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from funding.amounts import format_amount, funding_pct
 from funding.config import CATEGORIES, STATUSES, Settings, get_settings
@@ -45,8 +46,12 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         await scanner.stop()
 
     app = FastAPI(title=settings.site_name, lifespan=lifespan)
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
     app.add_middleware(
-        SessionMiddleware, secret_key=settings.secret_key, same_site="lax"
+        SessionMiddleware,
+        secret_key=settings.secret_key,
+        same_site="lax",
+        https_only=settings.session_https_only,
     )
 
     @app.middleware("http")
@@ -174,6 +179,36 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     @app.post("/logout")
     def logout(request: Request):
         request.session.clear()
+        return RedirectResponse("/", status_code=303)
+
+    @app.get("/account/password", response_class=HTMLResponse)
+    def password_get(request: Request):
+        user = current_user(request)
+        if not user:
+            return RedirectResponse("/login", status_code=303)
+        return templates.TemplateResponse(
+            request, "password.html", base_ctx(request)
+        )
+
+    @app.post("/account/password")
+    def password_post(
+        request: Request,
+        current_password: str = Form(...),
+        new_password: str = Form(...),
+        new_password2: str = Form(...),
+    ):
+        user = current_user(request)
+        if not user:
+            return RedirectResponse("/login", status_code=303)
+        if new_password != new_password2:
+            flash(request, "New passwords do not match", "error")
+            return RedirectResponse("/account/password", status_code=303)
+        try:
+            service.change_password(user, current_password, new_password)
+        except ValueError as exc:
+            flash(request, str(exc), "error")
+            return RedirectResponse("/account/password", status_code=303)
+        flash(request, "Password updated.", "ok")
         return RedirectResponse("/", status_code=303)
 
     @app.get("/proposals/new", response_class=HTMLResponse)

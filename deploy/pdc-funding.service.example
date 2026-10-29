@@ -1,0 +1,22 @@
+[Unit]
+Description=PDC Funding (funding.privacydatacoin.com)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/pdc-funding
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/ubuntu/pdc-funding/.env
+ExecStart=/home/ubuntu/pdc-funding/.venv/bin/python -m funding
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

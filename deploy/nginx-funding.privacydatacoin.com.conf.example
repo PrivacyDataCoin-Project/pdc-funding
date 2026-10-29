@@ -1,0 +1,38 @@
+# Install as /etc/nginx/sites-available/funding.privacydatacoin.com
+# then: ln -s … sites-enabled && certbot --nginx -d funding.privacydatacoin.com
+# App listens on 127.0.0.1:8095 (see BIND_PORT in .env).
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name funding.privacydatacoin.com;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/html;
+        allow all;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name funding.privacydatacoin.com;
+
+    include /etc/nginx/snippets/pdc-edge-protect-web.conf;
+
+    # ssl_* filled by certbot, or copy from another privacydatacoin.com vhost
+
+    location / {
+        proxy_pass http://127.0.0.1:8095;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+}

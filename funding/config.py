@@ -96,7 +96,11 @@ class Settings:
         default_factory=lambda: _env("BOOTSTRAP_ADMIN_PASSWORD")
     )
     bootstrap_admin_email: str = field(
-        default_factory=lambda: _env("BOOTSTRAP_ADMIN_EMAIL", "admin@localhost")
+        default_factory=lambda: _env("BOOTSTRAP_ADMIN_EMAIL", "admin@example.com")
+    )
+    session_https_only: bool = field(
+        default_factory=lambda: _env("SESSION_HTTPS_ONLY", "0").lower()
+        in ("1", "true", "yes", "on")
     )
 
     def __post_init__(self) -> None:

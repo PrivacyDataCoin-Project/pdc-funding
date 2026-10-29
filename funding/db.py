@@ -210,6 +210,15 @@ class Database:
             ).fetchone()
             return self._row_user(row) if row else None
 
+    def set_password_hash(self, user_id: int, password_hash: str) -> None:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (password_hash, user_id),
+            )
+            if cur.rowcount != 1:
+                raise KeyError(f"user {user_id} missing")
+
     def get_user_by_username(self, username: str) -> Optional[User]:
         with self._lock, self._connect() as conn:
             row = conn.execute(

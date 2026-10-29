@@ -121,6 +121,19 @@ class FundingService:
             return None
         return user
 
+    def change_password(
+        self, user: User, current_password: str, new_password: str
+    ) -> None:
+        if not self.verify_password(current_password, user.password_hash):
+            raise ValueError("current password is incorrect")
+        if len(new_password or "") < 8:
+            raise ValueError("password must be at least 8 characters")
+        if len((new_password or "").encode("utf-8")) > _BCRYPT_MAX_BYTES:
+            raise ValueError("password must be at most 72 bytes")
+        if current_password == new_password:
+            raise ValueError("new password must differ from the current one")
+        self.db.set_password_hash(user.id, self.hash_password(new_password))
+
     def create_proposal(
         self,
         user: User,

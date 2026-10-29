@@ -39,6 +39,8 @@ def main() -> None:
         host=settings.bind_host,
         port=settings.bind_port,
         reload=False,
+        proxy_headers=True,
+        forwarded_allow_ips="127.0.0.1,::1",
     )
 
 
