@@ -40,6 +40,9 @@
       <div class="row-stats">
         <div class="pct">{{ p.received_atomic|pct(p.funds_target_atomic) }}%</div>
         <div class="amt">{{ p.received_atomic|pdc }} / {{ p.funds_target_atomic|pdc }} PDC</div>
+        {% if p.paid_atomic %}
+        <div class="amt">left {{ (p.received_atomic - p.paid_atomic)|pdc }} · paid {{ p.paid_atomic|pdc }}</div>
+        {% endif %}
       </div>
     </article>
   {% else %}

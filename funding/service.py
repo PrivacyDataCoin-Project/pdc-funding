@@ -203,13 +203,16 @@ class FundingService:
     def progress(self, proposal: Proposal) -> dict:
         received = int(proposal.received_atomic)
         paid = int(proposal.paid_atomic)
+        pending = int(getattr(proposal, "pending_atomic", 0) or 0)
         available = max(0, received - paid)
         return {
             "received_atomic": received,
             "paid_atomic": paid,
+            "pending_atomic": pending,
             "available_atomic": available,
             "target_atomic": int(proposal.funds_target_atomic),
             "pct": funding_pct(received, int(proposal.funds_target_atomic)),
+            "paid_pct": funding_pct(paid, received) if received > 0 else 0.0,
         }
 
     def payout_milestone(

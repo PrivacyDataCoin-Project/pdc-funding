@@ -115,6 +115,7 @@ class Proposal:
     author: str = ""
     received_atomic: int = 0
     paid_atomic: int = 0
+    pending_atomic: int = 0
 
 
 @dataclass
@@ -318,7 +319,10 @@ class Database:
             "COALESCE((SELECT SUM(amount_atomic) FROM deposits d WHERE d.proposal_id = p.id), 0) "
             "AS received_atomic, "
             "COALESCE((SELECT SUM(amount_atomic) FROM payouts o WHERE o.proposal_id = p.id), 0) "
-            "AS paid_atomic "
+            "AS paid_atomic, "
+            "COALESCE((SELECT SUM(amount_atomic) FROM payouts o "
+            "WHERE o.proposal_id = p.id AND o.tx_hash LIKE 'pending:%'), 0) "
+            "AS pending_atomic "
             f"FROM proposals p JOIN users u ON u.id = p.user_id {where} "
             "ORDER BY p.created_at DESC LIMIT ? OFFSET ?"
         )
@@ -330,7 +334,8 @@ class Database:
     def proposals_needing_scan(self) -> list[Proposal]:
         with self._lock, self._connect() as conn:
             rows = conn.execute(
-                "SELECT p.*, u.username AS author, 0 AS received_atomic, 0 AS paid_atomic "
+                "SELECT p.*, u.username AS author, "
+                "0 AS received_atomic, 0 AS paid_atomic, 0 AS pending_atomic "
                 "FROM proposals p JOIN users u ON u.id = p.user_id "
                 "WHERE p.payment_id IS NOT NULL AND p.status IN (2, 3)"
             ).fetchall()
@@ -603,7 +608,10 @@ class Database:
             "COALESCE((SELECT SUM(amount_atomic) FROM deposits d WHERE d.proposal_id = p.id), 0) "
             "AS received_atomic, "
             "COALESCE((SELECT SUM(amount_atomic) FROM payouts o WHERE o.proposal_id = p.id), 0) "
-            "AS paid_atomic "
+            "AS paid_atomic, "
+            "COALESCE((SELECT SUM(amount_atomic) FROM payouts o "
+            "WHERE o.proposal_id = p.id AND o.tx_hash LIKE 'pending:%'), 0) "
+            "AS pending_atomic "
             "FROM proposals p JOIN users u ON u.id = p.user_id WHERE p.id = ?",
             (proposal_id,),
         ).fetchone()
@@ -640,6 +648,9 @@ class Database:
             if "received_atomic" in keys
             else 0,
             paid_atomic=int(row["paid_atomic"]) if "paid_atomic" in keys else 0,
+            pending_atomic=int(row["pending_atomic"])
+            if "pending_atomic" in keys
+            else 0,
         )
 
     @staticmethod

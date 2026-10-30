@@ -378,6 +378,52 @@ a:hover { color: #fff; text-decoration: underline; }
 
 .stat-sub { color: var(--faint); font-size: 0.9rem; margin: 0.25rem 0 0; }
 
+.ledger {
+  margin: 0;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.ledger > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.45rem;
+}
+
+.ledger > div:last-child { border-bottom: 0; padding-bottom: 0; }
+
+.ledger dt {
+  margin: 0;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ledger dd {
+  margin: 0;
+  text-align: right;
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+}
+
+.ledger-remain dd strong {
+  color: var(--cyan);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.ledger .faint { color: var(--faint); font-size: 0.78rem; }
+
+.bar-paid > i {
+  background: linear-gradient(90deg, var(--pink), var(--blue));
+}
+
 label {
   display: block;
   font-size: 0.82rem;

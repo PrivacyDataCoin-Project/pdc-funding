@@ -277,6 +277,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 comments=comments,
                 content_html=_markdownish(proposal.content),
                 received_usd=atomic_to_usd(progress["received_atomic"], pdc_usd),
+                paid_usd=atomic_to_usd(progress["paid_atomic"], pdc_usd),
+                available_usd=atomic_to_usd(progress["available_atomic"], pdc_usd),
                 target_usd=atomic_to_usd(progress["target_atomic"], pdc_usd),
             ),
         )
@@ -367,6 +369,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 "funds_target_atomic": p.funds_target_atomic,
                 "received_atomic": p.received_atomic,
                 "paid_atomic": p.paid_atomic,
+                "pending_atomic": p.pending_atomic,
+                "available_atomic": max(0, p.received_atomic - p.paid_atomic),
                 "funded_pct": funding_pct(p.received_atomic, p.funds_target_atomic),
                 "addr_donation": p.integrated_address or None,
                 "created_at": p.created_at,

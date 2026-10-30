@@ -32,15 +32,32 @@
 
     <aside>
       <div class="aside-block">
-        <h3>Progress</h3>
+        <h3>Funding progress</h3>
         <p class="stat-big">{{ '%.1f'|format(progress.pct) }}%</p>
-        <p class="stat-sub">
-          {{ progress.received_atomic|pdc }} received
-          {% if received_usd %}(≈ ${{ '%.2f'|format(received_usd) }}){% endif %}
-          · {{ progress.available_atomic|pdc }} available
-          · {{ progress.paid_atomic|pdc }} paid
-        </p>
+        <p class="stat-sub">of target {{ progress.target_atomic|pdc }} PDC{% if target_usd %} (≈ ${{ '%.2f'|format(target_usd) }}){% endif %}</p>
         <div class="bar" data-pct="{{ '%.1f'|format(progress.pct) }}" style="margin-top:0.75rem"><i></i></div>
+      </div>
+
+      <div class="aside-block">
+        <h3>Escrow status</h3>
+        <dl class="ledger">
+          <div>
+            <dt>Received</dt>
+            <dd>{{ progress.received_atomic|pdc }} PDC{% if received_usd %} <span class="faint">≈ ${{ '%.2f'|format(received_usd) }}</span>{% endif %}</dd>
+          </div>
+          <div>
+            <dt>Paid out</dt>
+            <dd>{{ progress.paid_atomic|pdc }} PDC{% if paid_usd %} <span class="faint">≈ ${{ '%.2f'|format(paid_usd) }}</span>{% endif %}{% if progress.pending_atomic %} <span class="faint">(incl. {{ progress.pending_atomic|pdc }} pending)</span>{% endif %}</dd>
+          </div>
+          <div class="ledger-remain">
+            <dt>Remaining to pay</dt>
+            <dd><strong>{{ progress.available_atomic|pdc }} PDC</strong>{% if available_usd %} <span class="faint">≈ ${{ '%.2f'|format(available_usd) }}</span>{% endif %}</dd>
+          </div>
+        </dl>
+        {% if progress.received_atomic > 0 %}
+        <div class="bar bar-paid" data-pct="{{ '%.1f'|format(progress.paid_pct) }}" title="Share of received already paid" style="margin-top:0.85rem"><i></i></div>
+        <p class="stat-sub">{{ '%.1f'|format(progress.paid_pct) }}% of received already paid</p>
+        {% endif %}
       </div>
 
       {% if proposal.integrated_address and proposal.status >= 2 %}
@@ -98,12 +115,13 @@
         </form>
         <form method="post" action="/proposals/{{ proposal.id }}/payout" style="margin-top:1rem">
           <label for="amount">Milestone payout (PDC)</label>
-          <input id="amount" name="amount" required placeholder="10">
+          <input id="amount" name="amount" required placeholder="{{ progress.available_atomic|pdc }}" value="{% if progress.available_atomic %}{{ progress.available_atomic|pdc }}{% endif %}">
+          <p class="stat-sub">Max available now: {{ progress.available_atomic|pdc }} PDC</p>
           <label for="to_address">To address / @alias</label>
           <input id="to_address" name="to_address" value="{{ proposal.payout_address }}" placeholder="defaults to proposal payout address">
           <label for="milestone_note">Note</label>
           <input id="milestone_note" name="milestone_note" placeholder="Milestone 1">
-          <button class="btn" type="submit">Pay out</button>
+          <button class="btn" type="submit"{% if progress.available_atomic <= 0 %} disabled{% endif %}>Pay out</button>
         </form>
       </div>
       {% endif %}
