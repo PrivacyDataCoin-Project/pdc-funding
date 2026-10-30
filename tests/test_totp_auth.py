@@ -85,3 +85,19 @@ def test_login_totp_and_admin_users(tmp_path: Path):
             follow_redirects=False,
         )
         assert bad.headers.get("location") == "/login"
+
+
+def test_users_panel_forbidden_for_non_admin(tmp_path: Path):
+    settings = _settings(tmp_path, bootstrap_admin_password="")
+    app = create_app(settings)
+    with TestClient(app) as client:
+        svc = app.state.service
+        user = svc.register("alice", "a@example.com", "password123")
+        # First registrant becomes is_admin; still not the bootstrap "admin" username.
+        assert user.is_admin
+        assert user.username.lower() != settings.bootstrap_admin_user.lower()
+        enable_totp(svc, user.id)
+        login_with_totp(client, "alice", "password123")
+        denied = client.get("/admin/users")
+        assert denied.status_code == 403
+        assert b"Users</a>" not in client.get("/").content

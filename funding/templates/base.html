@@ -19,7 +19,7 @@
         {% if user %}
           <a href="/proposals/new">New proposal</a>
           <a href="/account/password">Password</a>
-          {% if user.is_admin %}<a href="/admin/users">Users</a>{% endif %}
+          {% if is_primary_admin %}<a href="/admin/users">Users</a>{% endif %}
           <span class="pill">{{ user.username }} · {{ user.email }}{% if user.is_admin %} · admin{% endif %}</span>
           <form action="/logout" method="post" style="display:inline">
             <button class="linkish" type="submit">Log out</button>

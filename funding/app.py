@@ -96,13 +96,21 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             request.session.pop("user_id", None)
         return user
 
+    def is_primary_admin(user: Optional[User]) -> bool:
+        """Users panel is only for the site admin account (bootstrap username)."""
+        if not user or not user.is_admin:
+            return False
+        return user.username.lower() == settings.bootstrap_admin_user.lower()
+
     def base_ctx(request: Request, **extra: Any) -> dict[str, Any]:
         book = fetch_prices(settings)
         pdc_usd = book.pdc_usd() if book else None
+        user = current_user(request)
         ctx = {
             "request": request,
             "site_name": settings.site_name,
-            "user": current_user(request),
+            "user": user,
+            "is_primary_admin": is_primary_admin(user),
             "categories": CATEGORIES,
             "statuses": STATUSES,
             "wallet_enabled": settings.wallet_enabled,
@@ -320,9 +328,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
-        if not user.is_admin:
-            flash(request, "Admin only", "error")
-            return RedirectResponse("/", status_code=303)
+        if not is_primary_admin(user):
+            raise HTTPException(403, "Only the admin account can manage users")
         users = db.list_users(limit=500)
         return templates.TemplateResponse(
             request, "admin_users.html", base_ctx(request, users=users)
@@ -333,9 +340,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
-        if not user.is_admin:
-            flash(request, "Admin only", "error")
-            return RedirectResponse("/", status_code=303)
+        if not is_primary_admin(user):
+            raise HTTPException(403, "Only the admin account can manage users")
         try:
             new_password = service.admin_reset_password(user, user_id)
             flash(
@@ -352,9 +358,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
-        if not user.is_admin:
-            flash(request, "Admin only", "error")
-            return RedirectResponse("/", status_code=303)
+        if not is_primary_admin(user):
+            raise HTTPException(403, "Only the admin account can manage users")
         try:
             service.admin_reset_totp(user, user_id)
             flash(
