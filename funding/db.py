@@ -316,6 +316,19 @@ class Database:
             )
         return cid
 
+    def peek_login_challenge(
+        self, challenge_id: str, *, purpose: str
+    ) -> Optional[int]:
+        """Return user_id if challenge is still valid (not consumed)."""
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM login_challenges "
+                "WHERE id = ? AND purpose = ? AND consumed_at IS NULL "
+                "AND expires_at > datetime('now')",
+                (challenge_id, purpose),
+            ).fetchone()
+            return int(row["user_id"]) if row else None
+
     def consume_login_challenge(
         self, challenge_id: str, *, purpose: str
     ) -> Optional[int]:
@@ -323,22 +336,12 @@ class Database:
         with self._lock, self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT * FROM login_challenges WHERE id = ?",
-                (challenge_id,),
+                "SELECT user_id FROM login_challenges "
+                "WHERE id = ? AND purpose = ? AND consumed_at IS NULL "
+                "AND expires_at > datetime('now')",
+                (challenge_id, purpose),
             ).fetchone()
             if not row:
-                return None
-            if str(row["purpose"]) != purpose:
-                return None
-            if row["consumed_at"] is not None:
-                return None
-            # expires_at stored as UTC text from datetime('now'); compare in SQL
-            alive = conn.execute(
-                "SELECT 1 AS ok FROM login_challenges "
-                "WHERE id = ? AND consumed_at IS NULL AND expires_at > datetime('now')",
-                (challenge_id,),
-            ).fetchone()
-            if not alive:
                 return None
             conn.execute(
                 "UPDATE login_challenges SET consumed_at = datetime('now') WHERE id = ?",

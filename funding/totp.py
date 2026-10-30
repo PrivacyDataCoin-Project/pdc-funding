@@ -52,17 +52,21 @@ def new_secret_base32() -> str:
     return pyotp.random_base32(length=32)
 
 
+def _totp(secret_base32: str) -> pyotp.TOTP:
+    return pyotp.TOTP(secret_base32, digits=6, interval=30)
+
+
 def provisioning_uri(secret_base32: str, *, username: str, issuer: str) -> str:
-    totp = pyotp.TOTP(secret_base32, digits=6, interval=30, digest=hashlib.sha1)
-    return totp.provisioning_uri(name=username, issuer_name=issuer)
+    return _totp(secret_base32).provisioning_uri(
+        name=username, issuer_name=issuer
+    )
 
 
 def verify_code(secret_base32: str, code: str, *, window: int = 1) -> bool:
     cleaned = re.sub(r"\s+", "", (code or "").strip())
     if not cleaned.isdigit() or len(cleaned) != 6:
         return False
-    totp = pyotp.TOTP(secret_base32, digits=6, interval=30, digest=hashlib.sha1)
-    return bool(totp.verify(cleaned, valid_window=window))
+    return bool(_totp(secret_base32).verify(cleaned, valid_window=window))
 
 
 def qr_data_url(otpauth_uri: str) -> str:
@@ -75,7 +79,9 @@ def qr_data_url(otpauth_uri: str) -> str:
     return f"data:image/png;base64,{b64}"
 
 
-def current_code(secret_base32: str) -> str:
-    """Test helper — current TOTP code."""
-    totp = pyotp.TOTP(secret_base32, digits=6, interval=30, digest=hashlib.sha1)
-    return totp.now()
+def current_code(secret_base32: str, *, for_time: Optional[float] = None) -> str:
+    """Test helper — TOTP code for now (or for_time)."""
+    totp = _totp(secret_base32)
+    if for_time is None:
+        return totp.now()
+    return totp.at(int(for_time))

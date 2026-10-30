@@ -196,7 +196,8 @@ class FundingService:
         return self.db.create_login_challenge(user.id, "login", ttl_seconds=300)
 
     def finish_login_totp(self, challenge_id: str, code: str) -> User:
-        user_id = self.db.consume_login_challenge(challenge_id, purpose="login")
+        # Verify TOTP before consuming so a mistyped code can be retried.
+        user_id = self.db.peek_login_challenge(challenge_id, purpose="login")
         if user_id is None:
             raise ValueError("login challenge expired or invalid")
         user = self.db.get_user(user_id)
@@ -208,6 +209,9 @@ class FundingService:
         secret = decrypt_secret(blob, self._totp_kek)
         if not verify_code(secret, code):
             raise ValueError("invalid authenticator code")
+        consumed = self.db.consume_login_challenge(challenge_id, purpose="login")
+        if consumed is None or consumed != user.id:
+            raise ValueError("login challenge expired or invalid")
         return user
 
     def create_proposal(
