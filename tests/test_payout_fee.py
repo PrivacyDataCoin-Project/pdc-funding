@@ -92,3 +92,26 @@ def test_payout_rejects_amount_not_above_fee(tmp_path: Path):
     except ValueError as exc:
         assert "fee" in str(exc).lower()
     assert svc.db.list_payouts(prop.id) == []
+
+
+def test_payout_rejects_when_wallet_unlocked_too_low(tmp_path: Path):
+    svc, admin, prop, _wallet = _svc(tmp_path)
+
+    class LowBal(CaptureWallet):
+        @property
+        def enabled(self) -> bool:
+            return True
+
+        def get_unlocked_atomic(self, asset_id=None) -> int:
+            return int(0.49 * ATOMIC)
+
+        def transfer(self, address: str, amount_atomic: int, comment: str = "") -> str:
+            raise AssertionError("transfer must not run when unlocked is short")
+
+    svc.wallet = LowBal(svc.settings)
+    try:
+        svc.payout_milestone(admin, prop.id, amount="0.5")
+        assert False
+    except ValueError as exc:
+        assert "unlocked" in str(exc).lower()
+    assert svc.db.list_payouts(prop.id) == []

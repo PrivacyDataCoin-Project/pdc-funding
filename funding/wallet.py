@@ -110,6 +110,31 @@ class WalletClient:
         result = self._call("getaddress")
         return str(result["address"])
 
+    def get_unlocked_atomic(self, asset_id: Optional[str] = None) -> int:
+        """Unlocked balance for the native/escrow asset (0 in dry-run)."""
+        if not self.enabled:
+            return 0
+        result = self._call("getbalance")
+        if not isinstance(result, dict):
+            raise WalletError("getbalance returned unexpected body")
+        want = (asset_id or self.settings.pdc_asset_id).strip().lower()
+        balances = result.get("balances")
+        if isinstance(balances, list):
+            for entry in balances:
+                if not isinstance(entry, dict):
+                    continue
+                info = entry.get("asset_info") or {}
+                aid = str(info.get("asset_id") or "").strip().lower()
+                if aid == want:
+                    try:
+                        return int(entry.get("unlocked") or 0)
+                    except (TypeError, ValueError) as exc:
+                        raise WalletError("getbalance unlocked invalid") from exc
+        try:
+            return int(result.get("unlocked_balance") or 0)
+        except (TypeError, ValueError) as exc:
+            raise WalletError("getbalance unlocked_balance invalid") from exc
+
     def make_integrated_address(self, payment_id: Optional[str] = None) -> tuple[str, str]:
         pid = (payment_id or secrets.token_hex(8)).lower()
         if len(pid) != 16:

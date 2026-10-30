@@ -253,6 +253,22 @@ class FundingService:
             except WalletError as exc:
                 raise RuntimeError(str(exc)) from exc
         # Escrow is charged the full amount; recipient gets amount − fee.
+        # Wallet debit is send + fee == amount_atomic.
+        if self.wallet.enabled:
+            try:
+                unlocked = self.wallet.get_unlocked_atomic()
+            except WalletError as exc:
+                raise RuntimeError(str(exc)) from exc
+            if unlocked < amount_atomic:
+                raise ValueError(
+                    "hot wallet unlocked balance is "
+                    f"{format_amount(unlocked)} PDC; need "
+                    f"{format_amount(amount_atomic)} PDC "
+                    f"(payout {format_amount(send_atomic)} + fee "
+                    f"{format_amount(fee_atomic)}). Escrow remaining can "
+                    "exceed the wallet when older fees were not charged "
+                    "to the proposal — top up the wallet or pay a smaller amount"
+                )
         payout_id = self.db.reserve_payout(
             proposal_id=proposal.id,
             amount_atomic=amount_atomic,
