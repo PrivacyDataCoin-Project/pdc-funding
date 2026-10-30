@@ -8,7 +8,7 @@ from typing import Optional
 
 import bcrypt
 
-from funding.amounts import funding_pct, parse_amount
+from funding.amounts import format_amount, funding_pct, parse_amount
 from funding.config import CATEGORIES, STATUSES, Settings
 from funding.db import Comment, Database, Proposal, User
 from funding.wallet import WalletClient, WalletError, WalletRejected
@@ -235,6 +235,13 @@ class FundingService:
         if len(note) > _MAX_NOTE_CHARS:
             raise ValueError("note too long")
         amount_atomic = parse_amount(amount)
+        fee_atomic = int(self.settings.transfer_fee_atomic)
+        if amount_atomic <= fee_atomic:
+            raise ValueError(
+                f"amount must be greater than transfer fee "
+                f"({format_amount(fee_atomic)} PDC)"
+            )
+        send_atomic = amount_atomic - fee_atomic
         dest = (to_address or proposal.payout_address or "").strip()
         if not dest:
             raise ValueError("payout address required")
@@ -245,6 +252,7 @@ class FundingService:
                 dest = self.wallet.resolve_destination(dest)
             except WalletError as exc:
                 raise RuntimeError(str(exc)) from exc
+        # Escrow is charged the full amount; recipient gets amount − fee.
         payout_id = self.db.reserve_payout(
             proposal_id=proposal.id,
             amount_atomic=amount_atomic,
@@ -255,7 +263,7 @@ class FundingService:
         try:
             tx_hash = self.wallet.transfer(
                 dest,
-                amount_atomic,
+                send_atomic,
                 comment=f"pdc-funding proposal #{proposal.id}: {note}"[:120],
             )
         except WalletRejected as exc:
@@ -290,6 +298,8 @@ class FundingService:
             "payout_id": payout.id,
             "tx_hash": payout.tx_hash,
             "amount_atomic": payout.amount_atomic,
+            "send_atomic": send_atomic,
+            "fee_atomic": fee_atomic,
             "to_address": payout.to_address,
         }
 

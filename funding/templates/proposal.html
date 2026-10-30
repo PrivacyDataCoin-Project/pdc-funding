@@ -116,12 +116,12 @@
         <form method="post" action="/proposals/{{ proposal.id }}/payout" style="margin-top:1rem">
           <label for="amount">Milestone payout (PDC)</label>
           <input id="amount" name="amount" required placeholder="{{ progress.available_atomic|pdc }}" value="{% if progress.available_atomic %}{{ progress.available_atomic|pdc }}{% endif %}">
-          <p class="stat-sub">Max available now: {{ progress.available_atomic|pdc }} PDC</p>
+          <p class="stat-sub">Max available now: {{ progress.available_atomic|pdc }} PDC. Recipient receives amount − {{ transfer_fee_atomic|pdc }} fee.</p>
           <label for="to_address">To address / @alias</label>
           <input id="to_address" name="to_address" value="{{ proposal.payout_address }}" placeholder="defaults to proposal payout address">
           <label for="milestone_note">Note</label>
           <input id="milestone_note" name="milestone_note" placeholder="Milestone 1">
-          <button class="btn" type="submit"{% if progress.available_atomic <= 0 %} disabled{% endif %}>Pay out</button>
+          <button class="btn" type="submit"{% if progress.available_atomic <= transfer_fee_atomic %} disabled{% endif %}>Pay out</button>
         </form>
       </div>
       {% endif %}

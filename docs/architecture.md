@@ -31,7 +31,7 @@ An admin move to status `>= 2` assigns `payment_id` and `integrated_address` onc
 5. A payment is inserted into `deposits` when it is unlocked, has enough confirmations, and is not a different asset id. `received` is `SUM(deposits.amount_atomic)`.
 6. Admin payout reserves a `payouts` row (`tx_hash` starts with `pending:`), then calls wallet `transfer` for `PDC_ASSET_ID`. On a definite reject the row is deleted. On success the real tx id replaces the placeholder. `paid` is `SUM(payouts.amount_atomic)`, so a reservation already reduces available escrow.
 
-Available escrow for a proposal is `received - paid`, including pending reservations. The hot wallet itself is one pooled balance. Per-proposal numbers are an application invariant, not a chain partition. Transfer fees are paid by that wallet and are not subtracted from the proposal row.
+Available escrow for a proposal is `received - paid`, including pending reservations. The hot wallet itself is one pooled balance. Per-proposal numbers are an application invariant, not a chain partition. A milestone payout of amount `A` reserves `A` from escrow, sends `A − TRANSFER_FEE` to the recipient, and pays `TRANSFER_FEE` (default 0.01 PDC) on-chain from that same escrow debit. UI amounts are shown to 0.001 PDC.
 
 ## Trust boundaries
 

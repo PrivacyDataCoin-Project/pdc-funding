@@ -1,12 +1,15 @@
-"""Atomic amount helpers (1 PDC = 10^12)."""
+"""Atomic amount helpers (1 PDC = 10^12). Display unit is 0.001 PDC."""
 
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 ATOMIC = 10**12
+# UI / operator amounts are shown to milli-PDC (0.001).
+MILLI = 10**9
 # SQLite INTEGER is signed 64-bit. Larger values raise OverflowError at insert.
 _MAX_ATOMIC = 2**63 - 1
+_MILLI_QUANT = Decimal("0.001")
 
 
 def parse_amount(text: str) -> int:
@@ -29,14 +32,14 @@ def parse_amount(text: str) -> int:
 
 
 def format_amount(atomic: int) -> str:
-    """Format atomic units as a readable PDC string."""
+    """Format atomic units as PDC with 0.001 precision (floor to milli)."""
     if atomic < 0:
         raise ValueError("negative amount")
-    whole, frac = divmod(int(atomic), ATOMIC)
-    if frac == 0:
-        return str(whole)
-    frac_str = f"{frac:012d}".rstrip("0")
-    return f"{whole}.{frac_str}"
+    milli = (int(atomic) // MILLI) * MILLI
+    value = (Decimal(milli) / Decimal(ATOMIC)).quantize(
+        _MILLI_QUANT, rounding=ROUND_DOWN
+    )
+    return f"{value:.3f}"
 
 
 def funding_pct(received_atomic: int, target_atomic: int) -> float:

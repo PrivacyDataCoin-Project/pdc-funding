@@ -280,6 +280,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 paid_usd=atomic_to_usd(progress["paid_atomic"], pdc_usd),
                 available_usd=atomic_to_usd(progress["available_atomic"], pdc_usd),
                 target_usd=atomic_to_usd(progress["target_atomic"], pdc_usd),
+                transfer_fee_atomic=settings.transfer_fee_atomic,
             ),
         )
 
@@ -337,8 +338,10 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             )
             flash(
                 request,
-                f"Payout sent: {format_amount(result['amount_atomic'])} PDC "
-                f"(tx {result['tx_hash'][:16]}…)",
+                f"Payout sent: {format_amount(result['send_atomic'])} PDC "
+                f"(escrow −{format_amount(result['amount_atomic'])}, "
+                f"fee {format_amount(result['fee_atomic'])}; "
+                f"tx {result['tx_hash'][:16]}…)",
                 "ok",
             )
         except (PermissionError, ValueError, KeyError, RuntimeError) as exc:

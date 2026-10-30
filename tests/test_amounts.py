@@ -1,11 +1,16 @@
-from funding.amounts import ATOMIC, format_amount, funding_pct, parse_amount
+from funding.amounts import ATOMIC, MILLI, format_amount, funding_pct, parse_amount
 
 
 def test_parse_and_format_roundtrip():
     assert parse_amount("1") == ATOMIC
     assert parse_amount("1.5") == ATOMIC + ATOMIC // 2
-    assert format_amount(ATOMIC) == "1"
-    assert format_amount(ATOMIC + ATOMIC // 2) == "1.5"
+    assert format_amount(ATOMIC) == "1.000"
+    assert format_amount(ATOMIC + ATOMIC // 2) == "1.500"
+    assert format_amount(10_000_000_000) == "0.010"
+    assert format_amount(MILLI) == "0.001"
+    # Sub-milli dust floors to the lower milli for display.
+    assert format_amount(MILLI + 1) == "0.001"
+    assert format_amount(MILLI - 1) == "0.000"
 
 
 def test_parse_rejects_bad():
