@@ -13,6 +13,7 @@ def _svc(tmp_path: Path) -> FundingService:
         database_path=tmp_path / "t.db",
         wallet_rpc_url="",
         bootstrap_admin_password="",
+        bootstrap_admin_user="admin",
     )
     db = Database(settings.database_path)
     return FundingService(settings, db, WalletClient(settings))
@@ -20,7 +21,7 @@ def _svc(tmp_path: Path) -> FundingService:
 
 def test_register_create_fund_payout_dryrun(tmp_path: Path):
     svc = _svc(tmp_path)
-    admin = svc.register("admin", "a@example.com", "password123")
+    admin = svc.register("admin", "a@example.com", "password123", force_admin=True)
     assert admin.is_admin
 
     author = svc.register("dev", "d@example.com", "password123")
@@ -75,7 +76,7 @@ def test_register_create_fund_payout_dryrun(tmp_path: Path):
 
 def test_payout_cannot_overspend(tmp_path: Path):
     svc = _svc(tmp_path)
-    admin = svc.register("admin", "a@example.com", "password123")
+    admin = svc.register("admin", "a@example.com", "password123", force_admin=True)
     prop = svc.create_proposal(
         admin,
         headline="X",

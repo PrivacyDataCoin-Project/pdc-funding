@@ -29,7 +29,9 @@ Status: **READY FOR REVIEW**. Not a production approval. Escrow remains custodia
 | F-19 | P2 | Not changed | A reorg that removes a credited tx does not decrease `deposits`. Uniqueness prevents a second credit of the same tx id; a replaced tx id can credit again. |
 | F-20 | P2 | Not changed | Duplicate RPC rows for one `(tx_hash, payment_id)` keep the larger amount, not the sum. Summing would double-credit if the node repeats one output. Two real outputs in one tx can be under-counted. |
 | F-21 | P2 | Not changed | Status `completed` and `disabled` are not scanned. A donation that confirms only after that transition is invisible until an operator sets the watermark back and returns the proposal to `funding` or `wip`. |
-| F-22 | P2 | Not changed | No login rate limit, no second factor, no CSRF token. Cross-site POST cookies are withheld by `SameSite=Lax`. Framing is denied. A same-site attacker is out of scope of this patch. |
+| F-22 | P2 | Partial | TOTP 2FA on login/register. CSRF tokens on payout/status/comment/admin-user POSTs. Still no login rate limit. Cross-site POST cookies withheld by `SameSite=Lax`. |
+| F-27 | P0 | Fixed | Payout/status/user-admin required only `is_admin`. A forged or accidental second admin row could pay out. Now requires primary bootstrap username + `is_admin`. |
+| F-28 | P1 | Fixed | With `BOOTSTRAP_ADMIN_PASSWORD` set, public registration no longer auto-promotes the first user to admin. |
 | F-23 | P2 | Not changed | Session cookie is not `Secure`. Set a TLS terminator and a future `Secure` flag before exposing the app on the public internet. Placeholder secrets on loopback are still accepted for dry-run. |
 | F-24 | P2 | Not changed | If `get_bulk_payments` omits `asset_id`, the scanner cannot tell PDC from another asset. |
 | F-25 | P2 | Not changed | The first registered user is admin when `users` is empty and no bootstrap password was set. That is the documented bootstrap path; only the double-admin race was fixed. |

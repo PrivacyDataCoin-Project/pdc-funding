@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
@@ -97,10 +98,29 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         return user
 
     def is_primary_admin(user: Optional[User]) -> bool:
-        """Users panel is only for the site admin account (bootstrap username)."""
+        """Money/status/user admin UI: bootstrap admin account only."""
         if not user or not user.is_admin:
             return False
-        return user.username.lower() == settings.bootstrap_admin_user.lower()
+        expected = (settings.bootstrap_admin_user or "admin").strip().lower()
+        return user.username.lower() == expected
+
+    def csrf_token(request: Request) -> str:
+        tok = request.session.get("csrf_token")
+        if not isinstance(tok, str) or len(tok) < 32:
+            tok = secrets.token_hex(32)
+            request.session["csrf_token"] = tok
+        return tok
+
+    def require_csrf(request: Request, token: str) -> None:
+        expected = request.session.get("csrf_token")
+        got = (token or "").strip()
+        if (
+            not isinstance(expected, str)
+            or not expected
+            or not got
+            or not secrets.compare_digest(expected, got)
+        ):
+            raise HTTPException(403, "invalid CSRF token")
 
     def base_ctx(request: Request, **extra: Any) -> dict[str, Any]:
         book = fetch_prices(settings)
@@ -111,6 +131,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             "site_name": settings.site_name,
             "user": user,
             "is_primary_admin": is_primary_admin(user),
+            "csrf_token": csrf_token(request),
             "categories": CATEGORIES,
             "statuses": STATUSES,
             "wallet_enabled": settings.wallet_enabled,
@@ -336,12 +357,15 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         )
 
     @app.post("/admin/users/{user_id}/reset-password")
-    def admin_reset_password(request: Request, user_id: int):
+    def admin_reset_password(
+        request: Request, user_id: int, csrf_token: str = Form("")
+    ):
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
         if not is_primary_admin(user):
             raise HTTPException(403, "Only the admin account can manage users")
+        require_csrf(request, csrf_token)
         try:
             new_password = service.admin_reset_password(user, user_id)
             flash(
@@ -354,12 +378,15 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         return RedirectResponse("/admin/users", status_code=303)
 
     @app.post("/admin/users/{user_id}/reset-2fa")
-    def admin_reset_2fa(request: Request, user_id: int):
+    def admin_reset_2fa(
+        request: Request, user_id: int, csrf_token: str = Form("")
+    ):
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
         if not is_primary_admin(user):
             raise HTTPException(403, "Only the admin account can manage users")
+        require_csrf(request, csrf_token)
         try:
             service.admin_reset_totp(user, user_id)
             flash(
@@ -449,15 +476,19 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         request: Request,
         proposal_id: int,
         new_status: int = Form(...),
+        csrf_token: str = Form(""),
     ):
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
+        if not is_primary_admin(user):
+            raise HTTPException(403, "Only the admin account can change status")
+        require_csrf(request, csrf_token)
         try:
             service.set_status(user, proposal_id, new_status)
             flash(request, f"Status → {STATUSES.get(new_status, new_status)}", "ok")
         except PermissionError:
-            flash(request, "Admin only", "error")
+            raise HTTPException(403, "Admin only")
         except (ValueError, KeyError) as exc:
             flash(request, str(exc), "error")
         return RedirectResponse(f"/proposals/{proposal_id}", status_code=303)
@@ -467,10 +498,12 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         request: Request,
         proposal_id: int,
         message: str = Form(...),
+        csrf_token: str = Form(""),
     ):
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
+        require_csrf(request, csrf_token)
         try:
             service.add_comment(user, proposal_id, message)
         except (ValueError, KeyError) as exc:
@@ -484,10 +517,14 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         amount: str = Form(...),
         to_address: str = Form(""),
         milestone_note: str = Form(""),
+        csrf_token: str = Form(""),
     ):
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
+        if not is_primary_admin(user):
+            raise HTTPException(403, "Only the admin account can pay out escrow")
+        require_csrf(request, csrf_token)
         try:
             result = service.payout_milestone(
                 user,

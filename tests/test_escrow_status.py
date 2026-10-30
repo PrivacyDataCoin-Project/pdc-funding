@@ -13,10 +13,11 @@ def test_progress_shows_remaining_after_partial_payout(tmp_path: Path):
         database_path=tmp_path / "escrow.db",
         wallet_rpc_url="",
         bootstrap_admin_password="",
+        bootstrap_admin_user="admin",
     )
     db = Database(settings.database_path)
     svc = FundingService(settings, db, WalletClient(settings))
-    admin = svc.register("admin", "a@example.com", "password123")
+    admin = svc.register("admin", "a@example.com", "password123", force_admin=True)
     prop = svc.create_proposal(
         admin,
         headline="Partial",

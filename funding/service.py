@@ -115,13 +115,26 @@ class FundingService:
             raise ValueError("password must be at least 8 characters")
         if len((password or "").encode("utf-8")) > _BCRYPT_MAX_BYTES:
             raise ValueError("password must be at most 72 bytes")
+        # When BOOTSTRAP_ADMIN_PASSWORD is set, never auto-promote the first
+        # public registrant — only bootstrap / force_admin creates an admin.
+        allow_promote = not force_admin and not bool(
+            (self.settings.bootstrap_admin_password or "").strip()
+        )
         return self.db.create_user(
             username,
             email,
             self.hash_password(password),
             is_admin=bool(force_admin),
-            promote_if_first=not force_admin,
+            promote_if_first=allow_promote,
         )
+
+    def require_primary_admin(self, actor: User) -> None:
+        """Privileged money/status/user ops: bootstrap admin account only."""
+        if not actor.is_admin:
+            raise PermissionError("admin required")
+        expected = (self.settings.bootstrap_admin_user or "admin").strip().lower()
+        if actor.username.lower() != expected:
+            raise PermissionError("admin required")
 
     def authenticate(self, username: str, password: str) -> Optional[User]:
         user = self.db.get_user_by_username(username)
@@ -147,8 +160,7 @@ class FundingService:
 
     def admin_reset_password(self, actor: User, user_id: int) -> str:
         """Set a random password for another user. Returns the plaintext once."""
-        if not actor.is_admin:
-            raise PermissionError("admin required")
+        self.require_primary_admin(actor)
         target = self.db.get_user(user_id)
         if not target:
             raise KeyError("user not found")
@@ -158,8 +170,7 @@ class FundingService:
         return new_password
 
     def admin_reset_totp(self, actor: User, user_id: int) -> None:
-        if not actor.is_admin:
-            raise PermissionError("admin required")
+        self.require_primary_admin(actor)
         if not self.db.get_user(user_id):
             raise KeyError("user not found")
         self.db.clear_totp(user_id)
@@ -263,8 +274,7 @@ class FundingService:
         return refreshed
 
     def set_status(self, actor: User, proposal_id: int, status: int) -> Proposal:
-        if not actor.is_admin:
-            raise PermissionError("admin required")
+        self.require_primary_admin(actor)
         if status not in STATUSES:
             raise ValueError("invalid status")
         proposal = self.db.get_proposal(proposal_id)
@@ -304,8 +314,7 @@ class FundingService:
         to_address: Optional[str] = None,
         milestone_note: str = "",
     ) -> dict:
-        if not actor.is_admin:
-            raise PermissionError("admin required")
+        self.require_primary_admin(actor)
         proposal = self.db.get_proposal(proposal_id)
         if not proposal:
             raise KeyError("proposal not found")

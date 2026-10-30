@@ -39,10 +39,12 @@ def _open(tmp_path: Path, *, min_conf: int = 10):
         secret_key="test-secret",
         database_path=path,
         wallet_rpc_url="",
+        bootstrap_admin_password="",
+        bootstrap_admin_user="admin",
     )
     db = Database(path)
     svc = FundingService(dry, db, WalletClient(dry))
-    admin = svc.register("admin", "a@example.com", "password123")
+    admin = svc.register("admin", "a@example.com", "password123", force_admin=True)
     proposal = svc.create_proposal(
         admin,
         headline="Scan me",

@@ -28,12 +28,13 @@ def _svc(tmp_path: Path, deposit: str = "10"):
         database_path=tmp_path / "fee.db",
         wallet_rpc_url="",
         bootstrap_admin_password="",
+        bootstrap_admin_user="admin",
         transfer_fee_atomic=10_000_000_000,  # 0.01 PDC
     )
     db = Database(settings.database_path)
     wallet = CaptureWallet(settings)
     svc = FundingService(settings, db, wallet)
-    admin = svc.register("admin", "a@example.com", "password123")
+    admin = svc.register("admin", "a@example.com", "password123", force_admin=True)
     prop = svc.create_proposal(
         admin,
         headline="Fee",

@@ -22,6 +22,7 @@
         {% endfor %}
         {% if user %}
           <form method="post" action="/proposals/{{ proposal.id }}/comment" style="margin-top:1rem">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <label for="message">Add comment</label>
             <textarea id="message" name="message" required style="min-height:6rem"></textarea>
             <button class="btn" type="submit">Post</button>
@@ -101,10 +102,11 @@
       </div>
       {% endif %}
 
-      {% if user and user.is_admin %}
+      {% if user and is_primary_admin %}
       <div class="aside-block">
         <h3>Admin</h3>
         <form method="post" action="/proposals/{{ proposal.id }}/status">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label for="new_status">Set status</label>
           <select id="new_status" name="new_status">
             {% for code, label in statuses.items() %}
@@ -114,6 +116,7 @@
           <button class="btn ghost" type="submit">Update status</button>
         </form>
         <form method="post" action="/proposals/{{ proposal.id }}/payout" style="margin-top:1rem">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label for="amount">Milestone payout (PDC)</label>
           <input id="amount" name="amount" required placeholder="{{ progress.available_atomic|pdc }}" value="{% if progress.available_atomic %}{{ progress.available_atomic|pdc }}{% endif %}">
           <p class="stat-sub">Max available now: {{ progress.available_atomic|pdc }} PDC. Recipient receives amount − {{ transfer_fee_atomic|pdc }} fee.</p>

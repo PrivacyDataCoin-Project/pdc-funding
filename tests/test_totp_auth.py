@@ -67,9 +67,15 @@ def test_login_totp_and_admin_users(tmp_path: Path):
         assert users_page.status_code == 200
         assert b"admin@example.com" in users_page.content
         assert b"Registered users" in users_page.content
+        import re
 
+        m = re.search(rb'name="csrf_token" value="([a-f0-9]+)"', users_page.content)
+        assert m
+        csrf = m.group(1).decode()
         reset = client.post(
-            f"/admin/users/{admin.id}/reset-password", follow_redirects=False
+            f"/admin/users/{admin.id}/reset-password",
+            data={"csrf_token": csrf},
+            follow_redirects=False,
         )
         assert reset.status_code == 303
         # Follow to capture flash with new password is awkward; check hash changed.

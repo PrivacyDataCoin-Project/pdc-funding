@@ -18,11 +18,12 @@ def _funded(tmp_path: Path):
         database_path=tmp_path / "pay.db",
         wallet_rpc_url="",
         bootstrap_admin_password="",
+        bootstrap_admin_user="admin",
     )
     db = Database(settings.database_path)
     wallet = WalletClient(settings)
     svc = FundingService(settings, db, wallet)
-    admin = svc.register("admin", "a@example.com", "password123")
+    admin = svc.register("admin", "a@example.com", "password123", force_admin=True)
     proposal = svc.create_proposal(
         admin,
         headline="Pay me",
@@ -140,10 +141,12 @@ def test_donation_address_is_assigned_once(tmp_path: Path):
         secret_key="test-secret",
         database_path=tmp_path / "addr.db",
         wallet_rpc_url="",
+        bootstrap_admin_password="",
+        bootstrap_admin_user="admin",
     )
     db = Database(settings.database_path)
     svc = FundingService(settings, db, WalletClient(settings))
-    admin = svc.register("admin", "a@example.com", "password123")
+    admin = svc.register("admin", "a@example.com", "password123", force_admin=True)
     proposal = svc.create_proposal(
         admin,
         headline="Addr",
@@ -164,6 +167,7 @@ def test_only_one_first_user_is_admin(tmp_path: Path):
         secret_key="test-secret",
         database_path=tmp_path / "users.db",
         wallet_rpc_url="",
+        bootstrap_admin_password="",
     )
     svc = FundingService(settings, Database(settings.database_path), WalletClient(settings))
     barrier = threading.Barrier(2)

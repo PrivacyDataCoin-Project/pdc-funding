@@ -28,9 +28,11 @@
           <td class="mono">{{ u.created_at }}</td>
           <td class="actions">
             <form method="post" action="/admin/users/{{ u.id }}/reset-password" style="display:inline" onsubmit="return confirm('Reset password for {{ u.username }}?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn ghost" type="submit">Reset password</button>
             </form>
             <form method="post" action="/admin/users/{{ u.id }}/reset-2fa" style="display:inline" onsubmit="return confirm('Clear 2FA for {{ u.username }}?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn ghost" type="submit">Reset 2FA</button>
             </form>
           </td>
