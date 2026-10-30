@@ -6,7 +6,7 @@ Community crowdfunding for Privacy Data Coin. This service is an off-chain escro
 
 | Piece | Role |
 | --- | --- |
-| `funding/app.py` | FastAPI SSR UI, public read API, admin session for status, comments, payouts, and a manual scan |
+| `funding/app.py` | FastAPI SSR UI, public read-only JSON API, admin session for status, comments, and payouts |
 | `funding/service.py` | Registration, proposals, status changes, payout reservation |
 | `funding/db.py` | SQLite (WAL). Balances are sums, not cached columns |
 | `funding/wallet.py` | simplewallet JSON-RPC. Empty `WALLET_RPC_URL` is dry-run: no chain I/O |
@@ -54,9 +54,12 @@ The scan watermark (`meta.deposit_scan_min_height`) stays at least `DEPOSIT_MIN_
 
 ## API
 
-- `GET /api/v1/proposals` — public list
+Public JSON under `/api/v1` is read-only (GET only). OpenAPI `/docs` is disabled.
+
+- `GET /api/v1/proposals` — public list (funding progress + donation address when open)
 - `GET /api/v1/health` — `wallet` is `live` or `dry-run`
-- `POST /api/v1/scan` — admin session, one scanner pass
+
+Mutations (register, login, proposals, status, comments, payouts) use HTML form POSTs with a session cookie, not the JSON API. Deposit crediting runs in the background scanner.
 
 ## What this repo does not do
 

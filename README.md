@@ -49,9 +49,10 @@ Keep escrow thin; store surplus cold. Operator keys = custodial trust.
 
 ## API
 
-- `GET /api/v1/proposals`
-- `GET /api/v1/health`
-- `POST /api/v1/scan` (admin session) — force deposit scan
+- `GET /api/v1/proposals` — public read-only list
+- `GET /api/v1/health` — public readiness (`wallet`: `live` | `dry-run`)
+
+JSON `/api/v1` has no write methods. OpenAPI UI is disabled.
 
 ## Security notes
 

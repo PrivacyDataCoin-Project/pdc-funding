@@ -26,6 +26,11 @@ def test_health_and_proposals_api(tmp_path: Path):
         assert r.status_code == 200
         assert r.json() == []
 
+        assert client.post("/api/v1/scan").status_code == 404
+        assert client.post("/api/v1/proposals").status_code == 405
+        assert client.get("/docs").status_code == 404
+        assert client.get("/openapi.json").status_code == 404
+
         r = client.get("/")
         assert r.status_code == 200
         assert b"Fund the work" in r.content

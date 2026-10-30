@@ -45,7 +45,14 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         yield
         await scanner.stop()
 
-    app = FastAPI(title=settings.site_name, lifespan=lifespan)
+    # Public /api/v1 is read-only; no OpenAPI UI in production surface.
+    app = FastAPI(
+        title=settings.site_name,
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
     app.add_middleware(
         SessionMiddleware,
@@ -388,14 +395,6 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             "wallet": "live" if settings.wallet_enabled else "dry-run",
             "site": settings.site_name,
         }
-
-    @app.post("/api/v1/scan")
-    def api_scan(request: Request):
-        user = current_user(request)
-        if not user or not user.is_admin:
-            raise HTTPException(403, "admin required")
-        n = scanner.scan_once()
-        return {"credited": n}
 
     return app
 
