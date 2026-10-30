@@ -21,8 +21,8 @@
         {% for u in users %}
         <tr>
           <td>{{ u.id }}</td>
-          <td>{{ u.username }}</td>
-          <td>{{ u.email }}</td>
+          <td>{{ u.username }} <span class="faint">({{ u.email }})</span></td>
+          <td><a href="mailto:{{ u.email }}">{{ u.email }}</a></td>
           <td>{% if u.is_admin %}admin{% else %}user{% endif %}</td>
           <td>{% if u.totp_enabled %}on{% else %}off{% endif %}</td>
           <td class="mono">{{ u.created_at }}</td>
