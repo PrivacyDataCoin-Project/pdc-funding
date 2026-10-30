@@ -17,6 +17,7 @@ def test_health_and_proposals_api(tmp_path: Path):
         bootstrap_admin_user="admin",
         bootstrap_admin_email="admin@example.com",
         funding_totp_kek=TEST_TOTP_KEK,
+        session_https_only=False,
     )
     app = create_app(settings)
     with TestClient(app) as client:
@@ -50,6 +51,7 @@ def test_missing_session_user_does_not_500(tmp_path: Path):
         bootstrap_admin_user="admin",
         bootstrap_admin_email="admin@example.com",
         funding_totp_kek=TEST_TOTP_KEK,
+        session_https_only=False,
     )
     app = create_app(settings)
     with TestClient(app) as client:
