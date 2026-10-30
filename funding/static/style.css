@@ -508,6 +508,38 @@ input:focus, select:focus, textarea:focus {
   animation: rise 0.5s ease both;
 }
 
+.auth-enroll { max-width: 28rem; text-align: center; }
+.auth-enroll form { text-align: left; }
+.totp-qr {
+  display: block;
+  margin: 1rem auto;
+  border-radius: 0.6rem;
+  background: #fff;
+  padding: 0.5rem;
+}
+.mono { font-family: var(--font-mono); font-size: 0.85em; word-break: break-all; }
+
+.table-wrap { overflow-x: auto; margin-top: 1rem; }
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+table.data th, table.data td {
+  text-align: left;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+table.data th {
+  color: var(--faint);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+table.data .actions { white-space: nowrap; }
+table.data .actions .btn { margin: 0.15rem 0.15rem 0.15rem 0; font-size: 0.78rem; padding: 0.35rem 0.55rem; }
+
 .tx-list {
   list-style: none;
   padding: 0;

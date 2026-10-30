@@ -9,6 +9,7 @@ from funding.config import Settings
 from funding.db import Database
 from funding.service import FundingService
 from funding.wallet import WalletClient, WalletError, WalletRejected
+from tests.auth_helpers import TEST_TOTP_KEK, enable_totp, login_with_totp
 
 
 def _funded(tmp_path: Path):
@@ -211,12 +212,14 @@ def test_pending_payout_label(tmp_path: Path):
         bootstrap_admin_password="password123",
         bootstrap_admin_user="admin",
         bootstrap_admin_email="admin@example.com",
+        funding_totp_kek=TEST_TOTP_KEK,
     )
     app = create_app(settings)
     with TestClient(app) as client:
         svc = app.state.service
         admin = svc.db.get_user_by_username("admin")
         assert admin is not None
+        enable_totp(svc, admin.id)
         proposal = svc.create_proposal(
             admin,
             headline="UI",
@@ -241,12 +244,7 @@ def test_pending_payout_label(tmp_path: Path):
             milestone_note="held",
             created_by=admin.id,
         )
-        login = client.post(
-            "/login",
-            data={"username": "admin", "password": "password123"},
-            follow_redirects=False,
-        )
-        assert login.status_code == 303
+        login_with_totp(client, "admin", "password123")
         page = client.get(f"/proposals/{proposal.id}")
         assert page.status_code == 200
         assert b"pending" in page.content

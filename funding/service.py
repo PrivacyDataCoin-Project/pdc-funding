@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 from typing import Optional
 
 import bcrypt
@@ -11,6 +12,15 @@ import bcrypt
 from funding.amounts import format_amount, funding_pct, parse_amount
 from funding.config import CATEGORIES, STATUSES, Settings
 from funding.db import Comment, Database, Proposal, User
+from funding.totp import (
+    decrypt_secret,
+    derive_kek,
+    encrypt_secret,
+    new_secret_base32,
+    provisioning_uri,
+    qr_data_url,
+    verify_code,
+)
 from funding.wallet import WalletClient, WalletError, WalletRejected
 
 logger = logging.getLogger("pdc-funding.service")
@@ -55,6 +65,7 @@ class FundingService:
         self.settings = settings
         self.db = db
         self.wallet = wallet
+        self._totp_kek = derive_kek(settings.funding_totp_kek)
 
     def bootstrap_admin(self) -> None:
         if self.db.user_count() > 0:
@@ -133,6 +144,71 @@ class FundingService:
         if current_password == new_password:
             raise ValueError("new password must differ from the current one")
         self.db.set_password_hash(user.id, self.hash_password(new_password))
+
+    def admin_reset_password(self, actor: User, user_id: int) -> str:
+        """Set a random password for another user. Returns the plaintext once."""
+        if not actor.is_admin:
+            raise PermissionError("admin required")
+        target = self.db.get_user(user_id)
+        if not target:
+            raise KeyError("user not found")
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+        new_password = "".join(secrets.choice(alphabet) for _ in range(16))
+        self.db.set_password_hash(target.id, self.hash_password(new_password))
+        return new_password
+
+    def admin_reset_totp(self, actor: User, user_id: int) -> None:
+        if not actor.is_admin:
+            raise PermissionError("admin required")
+        if not self.db.get_user(user_id):
+            raise KeyError("user not found")
+        self.db.clear_totp(user_id)
+
+    def begin_totp_enroll(self, user: User) -> dict:
+        """Store a new encrypted secret (enabled=0) and return QR material."""
+        secret = new_secret_base32()
+        enc = encrypt_secret(secret, self._totp_kek)
+        self.db.set_totp_secret(user.id, enc, enabled=False)
+        uri = provisioning_uri(
+            secret, username=user.username, issuer=self.settings.totp_issuer
+        )
+        return {
+            "secret_base32": secret,
+            "totp_uri": uri,
+            "qr_data_url": qr_data_url(uri),
+        }
+
+    def confirm_totp_enroll(self, user: User, code: str) -> User:
+        blob = self.db.get_totp_secret_enc(user.id)
+        if not blob:
+            raise ValueError("start 2FA enrollment first")
+        secret = decrypt_secret(blob, self._totp_kek)
+        if not verify_code(secret, code):
+            raise ValueError("invalid authenticator code")
+        self.db.enable_totp(user.id)
+        refreshed = self.db.get_user(user.id)
+        assert refreshed is not None
+        return refreshed
+
+    def start_login_totp_challenge(self, user: User) -> str:
+        if not user.totp_enabled:
+            raise ValueError("2FA is not enabled for this account")
+        return self.db.create_login_challenge(user.id, "login", ttl_seconds=300)
+
+    def finish_login_totp(self, challenge_id: str, code: str) -> User:
+        user_id = self.db.consume_login_challenge(challenge_id, purpose="login")
+        if user_id is None:
+            raise ValueError("login challenge expired or invalid")
+        user = self.db.get_user(user_id)
+        if not user or not user.totp_enabled:
+            raise ValueError("user unavailable")
+        blob = self.db.get_totp_secret_enc(user.id)
+        if not blob:
+            raise ValueError("2FA secret missing")
+        secret = decrypt_secret(blob, self._totp_kek)
+        if not verify_code(secret, code):
+            raise ValueError("invalid authenticator code")
+        return user
 
     def create_proposal(
         self,

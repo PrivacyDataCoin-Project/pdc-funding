@@ -16,9 +16,10 @@
   </form>
   <p class="stat-sub" style="margin-top:1rem">
     {% if mode == 'register' %}
+      Next step: scan a QR and confirm with an authenticator app (2FA).
       Already have an account? <a href="/login">Log in</a>
     {% else %}
-      Need an account? <a href="/register">Register</a>
+      After password, enter your authenticator code. Need an account? <a href="/register">Register</a>
     {% endif %}
   </p>
 </section>

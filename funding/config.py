@@ -102,6 +102,15 @@ class Settings:
         default_factory=lambda: _env("SESSION_HTTPS_ONLY", "0").lower()
         in ("1", "true", "yes", "on")
     )
+    # AES-256 key material for TOTP secrets (64-hex or any passphrase → SHA-256).
+    funding_totp_kek: str = field(
+        default_factory=lambda: _env(
+            "FUNDING_TOTP_KEK", "dev-only-funding-totp-kek-change-me"
+        )
+    )
+    totp_issuer: str = field(
+        default_factory=lambda: _env("TOTP_ISSUER", "PDC Funding")
+    )
 
     def __post_init__(self) -> None:
         if self.bind_port < 1 or self.bind_port > 65535:

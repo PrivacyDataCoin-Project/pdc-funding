@@ -7,6 +7,7 @@ from funding.config import Settings
 from funding.db import Database
 from funding.service import FundingService
 from funding.wallet import WalletClient
+from tests.auth_helpers import TEST_TOTP_KEK, enable_totp, login_with_totp
 
 
 def test_change_password(tmp_path: Path):
@@ -19,16 +20,14 @@ def test_change_password(tmp_path: Path):
         bootstrap_admin_user="admin",
         bootstrap_admin_email="admin@example.com",
         session_https_only=False,
+        funding_totp_kek=TEST_TOTP_KEK,
     )
     app = create_app(settings)
     with TestClient(app) as client:
-        login = client.post(
-            "/login",
-            data={"username": "admin", "password": "password123"},
-            follow_redirects=False,
-        )
-        assert login.status_code == 303
-        assert login.headers.get("location") == "/"
+        admin = app.state.db.get_user_by_username("admin")
+        assert admin is not None
+        enable_totp(app.state.service, admin.id)
+        login_with_totp(client, "admin", "password123")
 
         bad = client.post(
             "/account/password",
@@ -61,12 +60,7 @@ def test_change_password(tmp_path: Path):
             follow_redirects=False,
         )
         assert old_login.headers.get("location") == "/login"
-        new_login = client.post(
-            "/login",
-            data={"username": "admin", "password": "newpass123"},
-            follow_redirects=False,
-        )
-        assert new_login.headers.get("location") == "/"
+        login_with_totp(client, "admin", "newpass123")
 
     db = Database(db_path)
     svc = FundingService(settings, db, WalletClient(settings))

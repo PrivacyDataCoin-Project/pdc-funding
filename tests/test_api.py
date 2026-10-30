@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from funding.app import create_app
 from funding.config import Settings
+from tests.auth_helpers import TEST_TOTP_KEK, enable_totp, login_with_totp
 
 
 def test_health_and_proposals_api(tmp_path: Path):
@@ -15,6 +16,7 @@ def test_health_and_proposals_api(tmp_path: Path):
         bootstrap_admin_password="password123",
         bootstrap_admin_user="admin",
         bootstrap_admin_email="admin@example.com",
+        funding_totp_kek=TEST_TOTP_KEK,
     )
     app = create_app(settings)
     with TestClient(app) as client:
@@ -47,15 +49,14 @@ def test_missing_session_user_does_not_500(tmp_path: Path):
         bootstrap_admin_password="password123",
         bootstrap_admin_user="admin",
         bootstrap_admin_email="admin@example.com",
+        funding_totp_kek=TEST_TOTP_KEK,
     )
     app = create_app(settings)
     with TestClient(app) as client:
-        login = client.post(
-            "/login",
-            data={"username": "admin", "password": "password123"},
-            follow_redirects=False,
-        )
-        assert login.status_code == 303
+        admin = app.state.db.get_user_by_username("admin")
+        assert admin is not None
+        enable_totp(app.state.service, admin.id)
+        login_with_totp(client, "admin", "password123")
         conn = sqlite3.connect(settings.database_path)
         conn.execute("DELETE FROM users")
         conn.commit()

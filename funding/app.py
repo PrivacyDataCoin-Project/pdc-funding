@@ -145,6 +145,23 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             request, "auth.html", base_ctx(request, mode="register")
         )
 
+    def _start_enroll(request: Request, user: User) -> RedirectResponse:
+        try:
+            material = service.begin_totp_enroll(user)
+        except Exception as exc:
+            flash(request, f"Could not start 2FA setup: {exc}", "error")
+            return RedirectResponse("/login", status_code=303)
+        request.session.pop("user_id", None)
+        request.session["auth_pending"] = {
+            "user_id": user.id,
+            "purpose": "enroll",
+        }
+        request.session["totp_enroll"] = {
+            "secret_base32": material["secret_base32"],
+            "qr_data_url": material["qr_data_url"],
+        }
+        return RedirectResponse("/account/2fa/enroll", status_code=303)
+
     @app.post("/register")
     def register_post(
         request: Request,
@@ -160,9 +177,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         except Exception:
             flash(request, "Could not register (username/email may be taken)", "error")
             return RedirectResponse("/register", status_code=303)
-        request.session["user_id"] = user.id
-        flash(request, "Welcome — account created.", "ok")
-        return RedirectResponse("/", status_code=303)
+        flash(request, "Account created — set up authenticator 2FA to continue.", "ok")
+        return _start_enroll(request, user)
 
     @app.get("/login", response_class=HTMLResponse)
     def login_get(request: Request):
@@ -180,7 +196,88 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         if not user:
             flash(request, "Invalid credentials", "error")
             return RedirectResponse("/login", status_code=303)
+        request.session.pop("user_id", None)
+        if not user.totp_enabled:
+            flash(request, "Set up authenticator 2FA to finish signing in.", "ok")
+            return _start_enroll(request, user)
+        try:
+            challenge_id = service.start_login_totp_challenge(user)
+        except ValueError as exc:
+            flash(request, str(exc), "error")
+            return RedirectResponse("/login", status_code=303)
+        request.session["auth_pending"] = {
+            "user_id": user.id,
+            "purpose": "login",
+            "challenge_id": challenge_id,
+        }
+        return RedirectResponse("/login/2fa", status_code=303)
+
+    @app.get("/login/2fa", response_class=HTMLResponse)
+    def login_2fa_get(request: Request):
+        pending = request.session.get("auth_pending") or {}
+        if pending.get("purpose") != "login" or not pending.get("challenge_id"):
+            return RedirectResponse("/login", status_code=303)
+        return templates.TemplateResponse(
+            request, "auth_totp.html", base_ctx(request, mode="login")
+        )
+
+    @app.post("/login/2fa")
+    def login_2fa_post(request: Request, code: str = Form(...)):
+        pending = request.session.get("auth_pending") or {}
+        challenge_id = pending.get("challenge_id")
+        if pending.get("purpose") != "login" or not challenge_id:
+            flash(request, "Login session expired — try again.", "error")
+            return RedirectResponse("/login", status_code=303)
+        try:
+            user = service.finish_login_totp(str(challenge_id), code)
+        except ValueError as exc:
+            flash(request, str(exc), "error")
+            return RedirectResponse("/login/2fa", status_code=303)
+        request.session.pop("auth_pending", None)
+        request.session.pop("totp_enroll", None)
         request.session["user_id"] = user.id
+        return RedirectResponse("/", status_code=303)
+
+    @app.get("/account/2fa/enroll", response_class=HTMLResponse)
+    def enroll_2fa_get(request: Request):
+        pending = request.session.get("auth_pending") or {}
+        enroll = request.session.get("totp_enroll") or {}
+        if pending.get("purpose") != "enroll" or not pending.get("user_id"):
+            return RedirectResponse("/login", status_code=303)
+        if not enroll.get("qr_data_url"):
+            user = db.get_user(int(pending["user_id"]))
+            if not user:
+                return RedirectResponse("/login", status_code=303)
+            return _start_enroll(request, user)
+        return templates.TemplateResponse(
+            request,
+            "auth_enroll.html",
+            base_ctx(
+                request,
+                qr_data_url=enroll.get("qr_data_url"),
+                secret_base32=enroll.get("secret_base32"),
+            ),
+        )
+
+    @app.post("/account/2fa/enroll")
+    def enroll_2fa_post(request: Request, code: str = Form(...)):
+        pending = request.session.get("auth_pending") or {}
+        if pending.get("purpose") != "enroll" or not pending.get("user_id"):
+            flash(request, "2FA setup expired — log in again.", "error")
+            return RedirectResponse("/login", status_code=303)
+        user = db.get_user(int(pending["user_id"]))
+        if not user:
+            flash(request, "Account missing", "error")
+            return RedirectResponse("/register", status_code=303)
+        try:
+            user = service.confirm_totp_enroll(user, code)
+        except ValueError as exc:
+            flash(request, str(exc), "error")
+            return RedirectResponse("/account/2fa/enroll", status_code=303)
+        request.session.pop("auth_pending", None)
+        request.session.pop("totp_enroll", None)
+        request.session["user_id"] = user.id
+        flash(request, "Authenticator enabled. You are signed in.", "ok")
         return RedirectResponse("/", status_code=303)
 
     @app.post("/logout")
@@ -217,6 +314,57 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             return RedirectResponse("/account/password", status_code=303)
         flash(request, "Password updated.", "ok")
         return RedirectResponse("/", status_code=303)
+
+    @app.get("/admin/users", response_class=HTMLResponse)
+    def admin_users(request: Request):
+        user = current_user(request)
+        if not user:
+            return RedirectResponse("/login", status_code=303)
+        if not user.is_admin:
+            flash(request, "Admin only", "error")
+            return RedirectResponse("/", status_code=303)
+        users = db.list_users(limit=500)
+        return templates.TemplateResponse(
+            request, "admin_users.html", base_ctx(request, users=users)
+        )
+
+    @app.post("/admin/users/{user_id}/reset-password")
+    def admin_reset_password(request: Request, user_id: int):
+        user = current_user(request)
+        if not user:
+            return RedirectResponse("/login", status_code=303)
+        if not user.is_admin:
+            flash(request, "Admin only", "error")
+            return RedirectResponse("/", status_code=303)
+        try:
+            new_password = service.admin_reset_password(user, user_id)
+            flash(
+                request,
+                f"Password reset for user #{user_id}. New password (copy now): {new_password}",
+                "ok",
+            )
+        except (PermissionError, KeyError, ValueError) as exc:
+            flash(request, str(exc), "error")
+        return RedirectResponse("/admin/users", status_code=303)
+
+    @app.post("/admin/users/{user_id}/reset-2fa")
+    def admin_reset_2fa(request: Request, user_id: int):
+        user = current_user(request)
+        if not user:
+            return RedirectResponse("/login", status_code=303)
+        if not user.is_admin:
+            flash(request, "Admin only", "error")
+            return RedirectResponse("/", status_code=303)
+        try:
+            service.admin_reset_totp(user, user_id)
+            flash(
+                request,
+                f"2FA cleared for user #{user_id}. They must enroll again on next login.",
+                "ok",
+            )
+        except (PermissionError, KeyError, ValueError) as exc:
+            flash(request, str(exc), "error")
+        return RedirectResponse("/admin/users", status_code=303)
 
     @app.get("/proposals/new", response_class=HTMLResponse)
     def proposal_new_get(request: Request):

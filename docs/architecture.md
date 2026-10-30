@@ -6,7 +6,8 @@ Community crowdfunding for Privacy Data Coin. This service is an off-chain escro
 
 | Piece | Role |
 | --- | --- |
-| `funding/app.py` | FastAPI SSR UI, public read-only JSON API, admin session for status, comments, and payouts |
+| `funding/app.py` | FastAPI SSR UI, public read-only JSON API, session auth with TOTP 2FA, admin users/payouts |
+| `funding/totp.py` | AES-GCM encrypted TOTP secrets (`FUNDING_TOTP_KEK`), QR enrollment |
 | `funding/service.py` | Registration, proposals, status changes, payout reservation |
 | `funding/db.py` | SQLite (WAL). Balances are sums, not cached columns |
 | `funding/wallet.py` | simplewallet JSON-RPC. Empty `WALLET_RPC_URL` is dry-run: no chain I/O |

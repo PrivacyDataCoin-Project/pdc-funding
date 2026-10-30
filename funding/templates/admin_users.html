@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Users · {{ site_name }}{% endblock %}
+{% block body %}
+<section class="panel">
+  <h1>Registered users</h1>
+  <p class="lede">Admin: reset password (shown once) or clear 2FA so the user re-enrolls on next login.</p>
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Username</th>
+          <th>Email</th>
+          <th>Role</th>
+          <th>2FA</th>
+          <th>Created</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>{{ u.id }}</td>
+          <td>{{ u.username }}</td>
+          <td>{{ u.email }}</td>
+          <td>{% if u.is_admin %}admin{% else %}user{% endif %}</td>
+          <td>{% if u.totp_enabled %}on{% else %}off{% endif %}</td>
+          <td class="mono">{{ u.created_at }}</td>
+          <td class="actions">
+            <form method="post" action="/admin/users/{{ u.id }}/reset-password" style="display:inline" onsubmit="return confirm('Reset password for {{ u.username }}?');">
+              <button class="btn ghost" type="submit">Reset password</button>
+            </form>
+            <form method="post" action="/admin/users/{{ u.id }}/reset-2fa" style="display:inline" onsubmit="return confirm('Clear 2FA for {{ u.username }}?');">
+              <button class="btn ghost" type="submit">Reset 2FA</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7">No users.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

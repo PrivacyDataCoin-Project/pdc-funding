@@ -28,7 +28,17 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT NOT NULL UNIQUE COLLATE NOCASE,
     password_hash TEXT NOT NULL,
     is_admin INTEGER NOT NULL DEFAULT 0,
+    totp_secret_enc BLOB,
+    totp_enabled INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS login_challenges (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    purpose TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS proposals (
@@ -96,6 +106,8 @@ class User:
     email: str
     password_hash: str
     is_admin: bool
+    totp_enabled: bool = False
+    created_at: str = ""
 
 
 @dataclass
@@ -158,6 +170,7 @@ class Database:
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -177,10 +190,38 @@ class Database:
         finally:
             conn.close()
 
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(users)")}
+        if "totp_enabled" not in cols:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+        if "totp_secret_enc" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN totp_secret_enc BLOB")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS login_challenges ("
+            "id TEXT PRIMARY KEY, "
+            "user_id INTEGER NOT NULL REFERENCES users(id), "
+            "purpose TEXT NOT NULL, "
+            "expires_at TEXT NOT NULL, "
+            "consumed_at TEXT)"
+        )
+
     def user_count(self) -> int:
         with self._lock, self._connect() as conn:
             row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
             return int(row["c"])
+
+    def list_users(self, *, limit: int = 200, offset: int = 0) -> list[User]:
+        limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM users ORDER BY id ASC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+            return [self._row_user(r) for r in rows]
 
     def create_user(
         self,
@@ -220,6 +261,90 @@ class Database:
             )
             if cur.rowcount != 1:
                 raise KeyError(f"user {user_id} missing")
+
+    def get_totp_secret_enc(self, user_id: int) -> Optional[bytes]:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT totp_secret_enc FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+            if not row or row["totp_secret_enc"] is None:
+                return None
+            return bytes(row["totp_secret_enc"])
+
+    def set_totp_secret(
+        self, user_id: int, secret_enc: bytes, *, enabled: bool = False
+    ) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE users SET totp_secret_enc = ?, totp_enabled = ? WHERE id = ?",
+                (secret_enc, int(enabled), user_id),
+            )
+            if cur.rowcount != 1:
+                raise KeyError(f"user {user_id} missing")
+
+    def enable_totp(self, user_id: int) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE users SET totp_enabled = 1 "
+                "WHERE id = ? AND totp_secret_enc IS NOT NULL",
+                (user_id,),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("totp secret missing")
+
+    def clear_totp(self, user_id: int) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE users SET totp_secret_enc = NULL, totp_enabled = 0 WHERE id = ?",
+                (user_id,),
+            )
+            if cur.rowcount != 1:
+                raise KeyError(f"user {user_id} missing")
+
+    def create_login_challenge(
+        self, user_id: int, purpose: str, *, ttl_seconds: int = 300
+    ) -> str:
+        cid = secrets.token_hex(16)
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO login_challenges (id, user_id, purpose, expires_at) "
+                "VALUES (?, ?, ?, datetime('now', ?))",
+                (cid, user_id, purpose, f"+{int(ttl_seconds)} seconds"),
+            )
+        return cid
+
+    def consume_login_challenge(
+        self, challenge_id: str, *, purpose: str
+    ) -> Optional[int]:
+        """Return user_id if challenge is valid and mark consumed; else None."""
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM login_challenges WHERE id = ?",
+                (challenge_id,),
+            ).fetchone()
+            if not row:
+                return None
+            if str(row["purpose"]) != purpose:
+                return None
+            if row["consumed_at"] is not None:
+                return None
+            # expires_at stored as UTC text from datetime('now'); compare in SQL
+            alive = conn.execute(
+                "SELECT 1 AS ok FROM login_challenges "
+                "WHERE id = ? AND consumed_at IS NULL AND expires_at > datetime('now')",
+                (challenge_id,),
+            ).fetchone()
+            if not alive:
+                return None
+            conn.execute(
+                "UPDATE login_challenges SET consumed_at = datetime('now') WHERE id = ?",
+                (challenge_id,),
+            )
+            return int(row["user_id"])
 
     def get_user_by_username(self, username: str) -> Optional[User]:
         with self._lock, self._connect() as conn:
@@ -619,12 +744,15 @@ class Database:
 
     @staticmethod
     def _row_user(row: sqlite3.Row) -> User:
+        keys = row.keys()
         return User(
             id=int(row["id"]),
             username=str(row["username"]),
             email=str(row["email"]),
             password_hash=str(row["password_hash"]),
             is_admin=bool(row["is_admin"]),
+            totp_enabled=bool(row["totp_enabled"]) if "totp_enabled" in keys else False,
+            created_at=str(row["created_at"]) if "created_at" in keys else "",
         )
 
     @staticmethod
