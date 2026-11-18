@@ -528,8 +528,32 @@ input:focus, select:focus, textarea:focus {
   margin-top: 0.55rem;
 }
 .asset-row .check { color: var(--ink); font-size: 0.95rem; }
+.asset-row input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.asset-bar-row {
+  display: grid;
+  grid-template-columns: 3.2rem 1fr auto;
+  gap: 0.45rem;
+  align-items: center;
+  margin-top: 0.45rem;
+}
+.asset-bar-row .asset-tag {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--cyan);
+}
+.asset-bar-row .amt {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
 @media (max-width: 640px) {
   .asset-row { grid-template-columns: 1fr; }
+  .asset-bar-row { grid-template-columns: 2.8rem 1fr; }
+  .asset-bar-row .amt { grid-column: 2; }
 }
 
 .auth-enroll { max-width: 28rem; text-align: center; }

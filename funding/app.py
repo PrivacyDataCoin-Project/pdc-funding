@@ -174,12 +174,29 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         cat: Optional[str] = None,
     ):
         proposals = db.list_proposals(status=status_filter, category=cat, limit=100)
+        proposal_cards = []
+        for p in proposals:
+            assets = db.list_proposal_assets(p.id)
+            asset_summaries = [
+                {
+                    "asset": a.asset,
+                    "target_atomic": int(a.funds_target_atomic),
+                    "received_atomic": int(a.received_atomic),
+                    "paid_atomic": int(a.paid_atomic),
+                    "pct": funding_pct(
+                        int(a.received_atomic), int(a.funds_target_atomic)
+                    ),
+                }
+                for a in assets
+            ]
+            proposal_cards.append({"proposal": p, "assets": asset_summaries})
         return templates.TemplateResponse(
             request,
             "index.html",
             base_ctx(
                 request,
                 proposals=proposals,
+                proposal_cards=proposal_cards,
                 status_filter=status_filter,
                 cat_filter=cat,
             ),
@@ -619,26 +636,48 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         items = db.list_proposals(
             status=status_filter, category=cat, limit=limit, offset=offset
         )
-        return [
-            {
-                "id": p.id,
-                "headline": p.headline,
-                "category": p.category,
-                "status": p.status,
-                "status_label": STATUSES.get(p.status),
-                "author": p.author,
-                "funds_target": format_amount(p.funds_target_atomic),
-                "funds_target_atomic": p.funds_target_atomic,
-                "received_atomic": p.received_atomic,
-                "paid_atomic": p.paid_atomic,
-                "pending_atomic": p.pending_atomic,
-                "available_atomic": max(0, p.received_atomic - p.paid_atomic),
-                "funded_pct": funding_pct(p.received_atomic, p.funds_target_atomic),
-                "addr_donation": p.integrated_address or None,
-                "created_at": p.created_at,
-            }
-            for p in items
-        ]
+        out = []
+        for p in items:
+            asset_rows = db.list_proposal_assets(p.id)
+            assets_payload = [
+                {
+                    "asset": a.asset,
+                    "funds_target_atomic": int(a.funds_target_atomic),
+                    "funds_target": format_amount_asset(
+                        int(a.funds_target_atomic), a.asset
+                    ),
+                    "received_atomic": int(a.received_atomic),
+                    "paid_atomic": int(a.paid_atomic),
+                    "funded_pct": funding_pct(
+                        int(a.received_atomic), int(a.funds_target_atomic)
+                    ),
+                    "addr_donation": a.integrated_address or a.btc_address or None,
+                }
+                for a in asset_rows
+            ]
+            out.append(
+                {
+                    "id": p.id,
+                    "headline": p.headline,
+                    "category": p.category,
+                    "status": p.status,
+                    "status_label": STATUSES.get(p.status),
+                    "author": p.author,
+                    "funds_target": format_amount(p.funds_target_atomic),
+                    "funds_target_atomic": p.funds_target_atomic,
+                    "received_atomic": p.received_atomic,
+                    "paid_atomic": p.paid_atomic,
+                    "pending_atomic": p.pending_atomic,
+                    "available_atomic": max(0, p.received_atomic - p.paid_atomic),
+                    "funded_pct": funding_pct(
+                        p.received_atomic, p.funds_target_atomic
+                    ),
+                    "addr_donation": p.integrated_address or None,
+                    "assets": assets_payload,
+                    "created_at": p.created_at,
+                }
+            )
+        return out
 
     @app.get("/api/v1/health")
     def api_health():

@@ -138,13 +138,12 @@ def test_btcx_only_proposal(tmp_path: Path):
         payout_addresses={ASSET_BTCX: "pdcDest"},
     )
     rows = svc.db.list_proposal_assets(prop.id)
-    # Autonomous fee model auto-adds a PDC lane for L1 network fees.
-    assert {r.asset for r in rows} == {ASSET_PDC, ASSET_BTCX}
+    # Free asset choice: BTCX-only must not force a PDC lane.
+    assert {r.asset for r in rows} == {ASSET_BTCX}
     prop = svc.set_status(admin, prop.id, 2)
     row = svc.db.get_proposal_asset(prop.id, ASSET_BTCX)
     assert row and row.integrated_address
-    pdc = svc.db.get_proposal_asset(prop.id, ASSET_PDC)
-    assert pdc and pdc.payment_id == row.payment_id
+    assert svc.db.get_proposal_asset(prop.id, ASSET_PDC) is None
 
 
 def test_btcx_payout_debits_pdc_escrow_for_l1_fee(tmp_path: Path):

@@ -278,31 +278,17 @@ class FundingService:
             targets = {ASSET_PDC: funds_target}
             if payout_address:
                 payout_addresses = {ASSET_PDC: payout_address}
-        # BTCX L1 network fee is paid in PDC from this proposal's escrow — ensure
-        # a PDC fee lane exists so payouts stay autonomous (no external fee float).
-        if ASSET_BTCX in selected and ASSET_PDC not in selected:
-            selected = [ASSET_PDC, *selected]
-            fee_human = format_amount_asset(
-                int(self.settings.transfer_fee_atomic), ASSET_PDC
-            )
-            targets.setdefault(ASSET_PDC, fee_human)
-            payout_addresses.setdefault(
-                ASSET_PDC, payout_addresses.get(ASSET_BTCX) or payout_address or ""
-            )
+        if not selected:
+            raise ValueError("select at least one asset: PDC, BTCX, and/or BTC")
+        # Free choice: any one asset, or any combination. L1 fee for BTCX payouts
+        # is covered at payout time from PDC escrow and/or oracle conversion of
+        # leftover BTCX/BTC — never force a PDC lane at create time.
         parsed: list[tuple[str, int, str]] = []
         for ticker in selected:
             raw_amt = (targets.get(ticker) or "").strip()
             if not raw_amt:
                 raise ValueError(f"target amount required for {ticker}")
             atomic = parse_amount_asset(raw_amt, ticker)
-            if ticker == ASSET_PDC and ASSET_BTCX in selected:
-                min_fee = int(self.settings.transfer_fee_atomic)
-                if atomic < min_fee:
-                    raise ValueError(
-                        "PDC target must cover at least one L1 network fee "
-                        f"({format_amount_asset(min_fee, ASSET_PDC)} PDC) "
-                        "because BTCX payouts debit fee from this proposal's PDC escrow"
-                    )
             addr = (payout_addresses.get(ticker) or payout_address or "").strip()
             if len(addr) > _MAX_ADDRESS_CHARS:
                 raise ValueError(f"payout address too long for {ticker}")
@@ -400,7 +386,10 @@ class FundingService:
     def available_atomic(self, proposal: Proposal, asset: str = ASSET_PDC) -> int:
         row = self.db.get_proposal_asset(proposal.id, asset)
         if not row:
-            if asset == ASSET_PDC:
+            # Legacy proposals have no proposal_assets rows — treat header as PDC.
+            # Multi-asset proposals without a PDC lane must not treat other-asset
+            # deposits as PDC available (proposal.received_atomic is unscoped).
+            if asset == ASSET_PDC and not self.db.list_proposal_assets(proposal.id):
                 return max(0, int(proposal.received_atomic) - int(proposal.paid_atomic))
             return 0
         return max(0, int(row.received_atomic) - int(row.paid_atomic))

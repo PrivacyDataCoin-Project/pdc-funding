@@ -65,11 +65,18 @@
       {% if proposal.status >= 2 %}
       <div class="aside-block">
         <h3>Donate</h3>
+        {% set ns = namespace(shown_l1='') %}
         {% for a in proposal_assets %}
           {% if a.asset in ['PDC', 'BTCX'] and a.integrated_address %}
-            <p class="stat-sub">{{ a.asset }} — send to integrated address:</p>
-            <div class="addr" id="donate-{{ a.asset }}">{{ a.integrated_address }}</div>
-            <button class="btn ghost" type="button" data-copy="#donate-{{ a.asset }}">Copy {{ a.asset }}</button>
+            {% if a.integrated_address != ns.shown_l1 %}
+              {% set ns.shown_l1 = a.integrated_address %}
+              <p class="stat-sub">
+                {% set l1_tickers = proposal_assets | selectattr('integrated_address', 'equalto', a.integrated_address) | map(attribute='asset') | list %}
+                {{ l1_tickers | join(' / ') }} — send to integrated address:
+              </p>
+              <div class="addr" id="donate-l1-{{ loop.index }}">{{ a.integrated_address }}</div>
+              <button class="btn ghost" type="button" data-copy="#donate-l1-{{ loop.index }}">Copy</button>
+            {% endif %}
           {% elif a.asset == 'BTC' and a.btc_address %}
             <p class="stat-sub">BTC — send native Bitcoin to:</p>
             <div class="addr" id="donate-BTC">{{ a.btc_address }}</div>

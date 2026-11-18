@@ -29,19 +29,47 @@
 </div>
 
 <div class="proposal-list">
-  {% for p in proposals %}
+  {% for card in proposal_cards %}
+    {% set p = card.proposal %}
     <article class="proposal-row">
       <div>
         <div class="status s{{ p.status }}">{{ statuses.get(p.status, p.status) }}</div>
         <h2><a href="/proposals/{{ p.id }}">{{ p.headline }}</a></h2>
-        <div class="row-meta">{{ p.category }} · by {{ p.author }} · target {{ p.funds_target_atomic|pdc }} PDC</div>
-        <div class="bar" data-pct="{{ p.received_atomic|pct(p.funds_target_atomic) }}"><i></i></div>
+        <div class="row-meta">
+          {{ p.category }} · by {{ p.author }} ·
+          {% if card.assets %}
+            {% for a in card.assets %}
+              {{ a.target_atomic|amt(a.asset) }} {{ a.asset }}{% if not loop.last %}, {% endif %}
+            {% endfor %}
+          {% else %}
+            target {{ p.funds_target_atomic|pdc }} PDC
+          {% endif %}
+        </div>
+        {% if card.assets %}
+          {% for a in card.assets %}
+            <div class="asset-bar-row">
+              <span class="asset-tag">{{ a.asset }}</span>
+              <div class="bar" data-pct="{{ '%.1f'|format(a.pct) }}"><i></i></div>
+              <span class="amt">{{ a.received_atomic|amt(a.asset) }} / {{ a.target_atomic|amt(a.asset) }}</span>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="bar" data-pct="{{ p.received_atomic|pct(p.funds_target_atomic) }}"><i></i></div>
+        {% endif %}
       </div>
       <div class="row-stats">
-        <div class="pct">{{ p.received_atomic|pct(p.funds_target_atomic) }}%</div>
-        <div class="amt">{{ p.received_atomic|pdc }} / {{ p.funds_target_atomic|pdc }} PDC</div>
-        {% if p.paid_atomic %}
-        <div class="amt">left {{ (p.received_atomic - p.paid_atomic)|pdc }} · paid {{ p.paid_atomic|pdc }}</div>
+        {% if card.assets %}
+          {% set overall = (card.assets|sum(attribute='pct') / (card.assets|length)) if card.assets else 0 %}
+          <div class="pct">{{ '%.0f'|format(overall) }}%</div>
+          {% for a in card.assets %}
+            <div class="amt">{{ a.asset }} {{ '%.0f'|format(a.pct) }}%</div>
+          {% endfor %}
+        {% else %}
+          <div class="pct">{{ p.received_atomic|pct(p.funds_target_atomic) }}%</div>
+          <div class="amt">{{ p.received_atomic|pdc }} / {{ p.funds_target_atomic|pdc }} PDC</div>
+          {% if p.paid_atomic %}
+          <div class="amt">left {{ (p.received_atomic - p.paid_atomic)|pdc }} · paid {{ p.paid_atomic|pdc }}</div>
+          {% endif %}
         {% endif %}
       </div>
     </article>

@@ -7,7 +7,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Montserrat:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=pdc-treasury-1">
+  <link rel="stylesheet" href="/static/style.css?v=pdc-assets-free-1">
+  <script defer src="/static/app.js?v=pdc-assets-free-1"></script>
 </head>
 <body>
   <div class="wrap">
@@ -46,6 +47,5 @@
       {% if pdc_usd %}PDC ≈ ${{ '%.4f'|format(pdc_usd) }}{% if price_source %} ({{ price_source }}){% endif %}.{% endif %}
     </footer>
   </div>
-  <script src="/static/app.js"></script>
 </body>
 </html>
