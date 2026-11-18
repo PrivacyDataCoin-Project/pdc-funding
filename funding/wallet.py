@@ -120,16 +120,22 @@ class WalletClient:
         want = (asset_id or self.settings.pdc_asset_id).strip().lower()
         balances = result.get("balances")
         if isinstance(balances, list):
+            found = False
             for entry in balances:
                 if not isinstance(entry, dict):
                     continue
                 info = entry.get("asset_info") or {}
                 aid = str(info.get("asset_id") or "").strip().lower()
                 if aid == want:
+                    found = True
                     try:
                         return int(entry.get("unlocked") or 0)
                     except (TypeError, ValueError) as exc:
                         raise WalletError("getbalance unlocked invalid") from exc
+            # Requested asset missing from balances → treat as zero (never fall
+            # back to native unlocked_balance, which would mis-read BTCX as PDC).
+            if found is False and asset_id:
+                return 0
         try:
             return int(result.get("unlocked_balance") or 0)
         except (TypeError, ValueError) as exc:
@@ -174,21 +180,35 @@ class WalletClient:
             raise WalletRejected(f"alias @{alias} has no address")
         return address
 
-    def transfer(self, address: str, amount_atomic: int, comment: str = "") -> str:
+    def transfer(
+        self,
+        address: str,
+        amount_atomic: int,
+        comment: str = "",
+        *,
+        asset_id: Optional[str] = None,
+        fee_atomic: Optional[int] = None,
+    ) -> str:
         if amount_atomic <= 0:
             raise ValueError("transfer amount must be positive")
         if not self.enabled:
             return f"dryrun_{secrets.token_hex(16)}"
         dest = self.resolve_destination(address)
+        aid = (asset_id or self.settings.pdc_asset_id).strip()
+        fee = (
+            int(fee_atomic)
+            if fee_atomic is not None
+            else int(self.settings.transfer_fee_atomic)
+        )
         params: dict[str, Any] = {
             "destinations": [
                 {
                     "address": dest,
                     "amount": amount_atomic,
-                    "asset_id": self.settings.pdc_asset_id,
+                    "asset_id": aid,
                 }
             ],
-            "fee": self.settings.transfer_fee_atomic,
+            "fee": fee,
             "mixin": 15,
             "push_payer": False,
             "hide_receiver": True,
@@ -228,7 +248,7 @@ class WalletClient:
         raw_payments = result.get("payments") or []
         if not isinstance(raw_payments, list):
             return []
-        best: dict[tuple[str, str], Payment] = {}
+        best: dict[tuple[str, str, str], Payment] = {}
         for item in raw_payments:
             if not isinstance(item, dict):
                 continue
@@ -253,7 +273,8 @@ class WalletClient:
                 unlock_time=unlock_time,
                 asset_id=asset_id,
             )
-            key = (pay.tx_hash.lower(), pay.payment_id)
+            # Include asset_id so PDC + BTCX legs in one tx are not collapsed.
+            key = (pay.tx_hash.lower(), pay.payment_id, pay.asset_id)
             prev = best.get(key)
             if prev is None or pay.block_height > prev.block_height:
                 best[key] = pay

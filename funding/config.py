@@ -68,8 +68,40 @@ class Settings:
             "d6329b5b1f7c0805b5c345f4957554002a2f557845f64d7645dae0e051a6498a",
         )
     )
+    btcx_asset_id: str = field(
+        default_factory=lambda: _env(
+            "BTCX_ASSET_ID",
+            "c2bf0410873b49ec7e7dd19d62bca9625d80cd3123670a67b48d997d3127426d",
+        )
+    )
+    # PDC L1 transfer fee (atomic PDC units). Default 0.01 PDC.
     transfer_fee_atomic: int = field(
         default_factory=lambda: _env_int("TRANSFER_FEE_ATOMIC", 10_000_000_000)
+    )
+    # Legacy/unused for hard fee model (L1 fee for BTCX comes from PDC escrow).
+    btcx_transfer_fee_atomic: int = field(
+        default_factory=lambda: _env_int("BTCX_TRANSFER_FEE_ATOMIC", 0)
+    )
+    # BTC dust/miner floor: payout amount must exceed this (sats). Miner fee itself
+    # is taken from the sent amount (subtractfeefromamount), not as a separate float.
+    btc_transfer_fee_sats: int = field(
+        default_factory=lambda: _env_int("BTC_TRANSFER_FEE_SATS", 1000)
+    )
+    # Bitcoin Core RPC for native BTC escrow (empty = dry-run). Do NOT reuse bridge wallet.
+    btc_rpc_url: str = field(default_factory=lambda: _env("BTC_RPC_URL"))
+    btc_rpc_user: str = field(default_factory=lambda: _env("BTC_RPC_USER"))
+    btc_rpc_password: str = field(default_factory=lambda: _env("BTC_RPC_PASSWORD"))
+    btc_wallet_name: str = field(
+        default_factory=lambda: _env("BTC_WALLET_NAME", "funding")
+    )
+    btc_min_confirmations: int = field(
+        default_factory=lambda: _env_int("BTC_MIN_CONFIRMATIONS", 3)
+    )
+    btc_explorer_tx_url: str = field(
+        default_factory=lambda: _env(
+            "BTC_EXPLORER_TX_URL",
+            "https://mempool.space/tx/",
+        )
     )
     deposit_min_confirmations: int = field(
         default_factory=lambda: _env_int("DEPOSIT_MIN_CONFIRMATIONS", 10)
@@ -125,6 +157,10 @@ class Settings:
     @property
     def wallet_enabled(self) -> bool:
         return bool(self.wallet_rpc_url)
+
+    @property
+    def btc_enabled(self) -> bool:
+        return bool(self.btc_rpc_url)
 
 
 def get_settings() -> Settings:

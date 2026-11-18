@@ -1,6 +1,6 @@
 # PDC Funding architecture
 
-Community crowdfunding for Privacy Data Coin. This service is an off-chain escrow ledger in front of one PDC simplewallet. It is not an on-chain contract. PDC L1 has no EVM; donation identity is an integrated address plus an 8-byte `payment_id`, the same pattern as the PDC tipbot.
+Community crowdfunding for Privacy Data Coin. This service is an off-chain escrow ledger in front of one PDC simplewallet (PDC + BTCX) and an optional Bitcoin Core named wallet `funding` (native BTC). It is not an on-chain contract. PDC L1 has no EVM; L1 donation identity is an integrated address plus an 8-byte `payment_id`, the same pattern as the PDC tipbot. BTC donations use a fresh bech32 address per proposal asset row.
 
 ## Components
 
@@ -8,14 +8,16 @@ Community crowdfunding for Privacy Data Coin. This service is an off-chain escro
 | --- | --- |
 | `funding/app.py` | FastAPI SSR UI, public read-only JSON API, session auth with TOTP 2FA, admin users/payouts |
 | `funding/totp.py` | AES-GCM encrypted TOTP secrets (`FUNDING_TOTP_KEK`), QR enrollment |
-| `funding/service.py` | Registration, proposals, status changes, payout reservation |
-| `funding/db.py` | SQLite (WAL). Balances are sums, not cached columns |
-| `funding/wallet.py` | simplewallet JSON-RPC. Empty `WALLET_RPC_URL` is dry-run: no chain I/O |
-| `funding/scanner.py` | Background loop. Credits confirmed incoming payments |
+| `funding/service.py` | Registration, multi-asset proposals, status changes, payout reservation |
+| `funding/db.py` | SQLite (WAL). `proposal_assets` + balances as sums, not cached columns |
+| `funding/assets.py` | PDC / BTCX / BTC tickers, decimals, asset ids |
+| `funding/wallet.py` | simplewallet JSON-RPC (PDC+BTCX). Empty `WALLET_RPC_URL` is dry-run |
+| `funding/btc_wallet.py` | bitcoind JSON-RPC for wallet `funding`. Empty `BTC_RPC_URL` is dry-run |
+| `funding/scanner.py` | Background loop. Credits L1 bulk payments and BTC address deltas |
 | `funding/prices.py` | Display-only USD quotes from Trade `GET /api/prices/usd` |
-| `funding/amounts.py` | Human PDC strings ↔ atomic units (`1 PDC = 10^12`) |
+| `funding/amounts.py` | Wrappers around `assets` parse/format |
 
-One process holds the wallet RPC, the SQLite file, and the session secret. Uvicorn is started by `python -m funding` (`funding/__main__.py`).
+One process holds the wallet RPCs, the SQLite file, and the session secret. Uvicorn is started by `python -m funding` (`funding/__main__.py`).
 
 ## Status flow
 
@@ -25,14 +27,14 @@ An admin move to status `>= 2` assigns `payment_id` and `integrated_address` onc
 
 ## Money flow
 
-1. Author submits a proposal (status `proposal`) with a target and an optional payout address or `@alias`.
-2. Admin opens funding. The wallet RPC `make_integrated_address` returns the donation address. Dry-run synthesizes one.
-3. Donors pay that integrated address on L1.
-4. The scanner calls wallet `get_bulk_payments` and daemon `GET {DAEMON_RPC_URL}/getinfo`.
-5. A payment is inserted into `deposits` when it is unlocked, has enough confirmations, and is not a different asset id. `received` is `SUM(deposits.amount_atomic)`.
-6. Admin payout reserves a `payouts` row (`tx_hash` starts with `pending:`), then calls wallet `transfer` for `PDC_ASSET_ID`. On a definite reject the row is deleted. On success the real tx id replaces the placeholder. `paid` is `SUM(payouts.amount_atomic)`, so a reservation already reduces available escrow.
+1. Author submits a proposal (status `proposal`) with one or more assets (PDC, BTCX, BTC), per-asset targets and payout destinations.
+2. Admin opens funding. For PDC/BTCX the wallet RPC `make_integrated_address` returns a shared donation address. For BTC, bitcoind `getnewaddress` on wallet `funding` returns a bech32 address. Dry-run synthesizes placeholders.
+3. Donors pay the relevant address (L1 integrated or BTC).
+4. The scanner credits L1 via `get_bulk_payments` (keyed by `asset_id`) and BTC via `getreceivedbyaddress` deltas. Daemon height gates L1 confirmations.
+5. Deposits are unique on `(tx_hash, payment_id, asset)`. `received` / `paid` are per-asset sums on `proposal_assets`.
+6. Admin payout reserves escrow **only from this proposal’s funded balances** (hard fee model): PDC carves `TRANSFER_FEE` from the payout amount; BTCX sends full BTCX and covers L1 fee from PDC escrow, or oracle-converts leftover BTCX/BTC on the same proposal (+2% slip) when PDC is short; BTC sends the full reserved amount with `subtractfeefromamount` so the miner fee comes from that BTC. Creating a BTCX proposal auto-adds a PDC fee lane when missing. Liquid PDC must still exist in the hot L1 wallet to pay the chain fee (maintain a small fee buffer; conversions reimburse the pool in BTCX/BTC).
 
-Available escrow for a proposal is `received - paid`, including pending reservations. The hot wallet itself is one pooled balance. Per-proposal numbers are an application invariant, not a chain partition. A milestone payout of amount `A` reserves `A` from escrow, sends `A − TRANSFER_FEE` to the recipient, and pays `TRANSFER_FEE` (default 0.01 PDC) on-chain from that same escrow debit. UI amounts are shown to 0.001 PDC.
+Available escrow is per asset: `received - paid`, including pending reservations. Hot wallets are pooled; per-proposal numbers are an application invariant.
 
 ## Trust boundaries
 
@@ -58,7 +60,7 @@ The scan watermark (`meta.deposit_scan_min_height`) stays at least `DEPOSIT_MIN_
 Public JSON under `/api/v1` is read-only (GET only). OpenAPI `/docs` is disabled.
 
 - `GET /api/v1/proposals` — public list (funding progress + donation address when open)
-- `GET /api/v1/health` — `wallet` is `live` or `dry-run`
+- `GET /api/v1/health` — `wallet` / `btc_wallet` are `live` or `dry-run`
 
 Mutations (register, login, proposals, status, comments, payouts) use HTML form POSTs with a session cookie, not the JSON API. Deposit crediting runs in the background scanner.
 

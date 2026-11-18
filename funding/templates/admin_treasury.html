@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Treasury · {{ site_name }}{% endblock %}
+{% block body %}
+<section class="panel">
+  <h1>Treasury</h1>
+  <p class="lede">Hot wallets vs per-proposal escrow ledger. Escrow numbers are application balances; hot wallets are pooled custody.</p>
+
+  <h2 class="section-title">Main wallets (hot)</h2>
+  <div class="stat-grid">
+    {% for ticker in ['PDC', 'BTCX', 'BTC'] %}
+      {% set h = treasury.hot[ticker] %}
+      <div class="stat-tile">
+        <p class="stat-label">{{ ticker }} {% if ticker == 'BTC' %}<span class="faint">({{ h.wallet_name }})</span>{% endif %}</p>
+        <p class="stat-value mono">{{ h.unlocked_atomic|amt(ticker) }}</p>
+        <p class="stat-sub">mode {{ h.mode }}{% if h.error %} · {{ h.error }}{% endif %}</p>
+      </div>
+    {% endfor %}
+  </div>
+
+  <h2 class="section-title">Escrow totals (all proposals)</h2>
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Asset</th>
+          <th>Received</th>
+          <th>Paid</th>
+          <th>Pending</th>
+          <th>Available</th>
+          <th>Hot − available</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ticker in ['PDC', 'BTCX', 'BTC'] %}
+          {% set t = treasury.escrow_totals[ticker] %}
+          <tr>
+            <td>{{ ticker }}</td>
+            <td class="mono">{{ t.received|amt(ticker) }}</td>
+            <td class="mono">{{ t.paid|amt(ticker) }}</td>
+            <td class="mono">{{ t.pending|amt(ticker) }}</td>
+            <td class="mono">{{ t.available|amt(ticker) }}</td>
+            <td class="mono">{{ treasury.unallocated[ticker]|amt(ticker) }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="stat-sub">“Hot − available” is residual in the pooled wallet (fee buffer, dust, unassigned coins). Negative means ledger available exceeds reported unlocked (check RPC / pending).</p>
+
+  <h2 class="section-title">Per funding proposal</h2>
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Headline</th>
+          <th>Status</th>
+          <th>Asset</th>
+          <th>Received</th>
+          <th>Paid</th>
+          <th>Available</th>
+          <th>Target</th>
+          <th>Deposit id</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in treasury.proposals %}
+          {% if p.assets %}
+            {% for a in p.assets %}
+            <tr>
+              {% if loop.first %}
+              <td rowspan="{{ p.assets|length }}"><a href="/proposals/{{ p.id }}">{{ p.id }}</a></td>
+              <td rowspan="{{ p.assets|length }}">{{ p.headline }}</td>
+              <td rowspan="{{ p.assets|length }}">{{ p.status_label }}</td>
+              {% endif %}
+              <td>{{ a.asset }}</td>
+              <td class="mono">{{ a.received_atomic|amt(a.asset) }}</td>
+              <td class="mono">{{ a.paid_atomic|amt(a.asset) }}</td>
+              <td class="mono">{{ a.available_atomic|amt(a.asset) }}</td>
+              <td class="mono">{{ a.target_atomic|amt(a.asset) }}</td>
+              <td class="mono faint">
+                {% if a.asset == 'BTC' %}
+                  {{ a.btc_address[:18] }}{% if a.btc_address|length > 18 %}…{% endif %}
+                {% else %}
+                  {{ a.payment_id or '—' }}
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td><a href="/proposals/{{ p.id }}">{{ p.id }}</a></td>
+              <td>{{ p.headline }}</td>
+              <td>{{ p.status_label }}</td>
+              <td colspan="6" class="faint">no asset rows</td>
+            </tr>
+          {% endif %}
+        {% else %}
+          <tr><td colspan="9">No proposals.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

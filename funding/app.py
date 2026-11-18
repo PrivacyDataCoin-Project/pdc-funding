@@ -17,6 +17,14 @@ from starlette.middleware.sessions import SessionMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from funding.amounts import format_amount, funding_pct
+from funding.assets import (
+    ASSET_BTC,
+    ASSET_PDC,
+    ASSETS,
+    SUPPORTED_ASSETS,
+    format_amount as format_amount_asset,
+)
+from funding.btc_wallet import BtcWalletClient
 from funding.config import CATEGORIES, STATUSES, Settings, get_settings
 from funding.db import Database, User
 from funding.prices import atomic_to_usd, fetch_prices
@@ -32,8 +40,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     settings = settings or get_settings()
     db = Database(settings.database_path)
     wallet = WalletClient(settings)
-    service = FundingService(settings, db, wallet)
-    scanner = DepositScanner(settings, db, wallet)
+    btc_wallet = BtcWalletClient(settings)
+    service = FundingService(settings, db, wallet, btc_wallet)
+    scanner = DepositScanner(settings, db, wallet, btc_wallet)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -73,6 +82,14 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
     templates.env.filters["pdc"] = format_amount
+
+    def _amt_filter(atomic, asset=ASSET_PDC) -> str:
+        n = int(atomic)
+        if n < 0:
+            return "-" + format_amount_asset(-n, asset)
+        return format_amount_asset(n, asset)
+
+    templates.env.filters["amt"] = _amt_filter
     templates.env.filters["pct"] = lambda received, target: (
         f"{funding_pct(int(received), int(target)):.1f}"
     )
@@ -135,9 +152,13 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             "categories": CATEGORIES,
             "statuses": STATUSES,
             "wallet_enabled": settings.wallet_enabled,
+            "btc_enabled": settings.btc_enabled,
+            "supported_assets": SUPPORTED_ASSETS,
+            "asset_specs": ASSETS,
             "pdc_usd": pdc_usd,
             "price_source": book.source if book else None,
             "explorer_tx_url": settings.explorer_tx_url,
+            "btc_explorer_tx_url": settings.btc_explorer_tx_url,
             "flash": request.session.pop("flash", None),
         }
         ctx.update(extra)
@@ -356,6 +377,20 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             request, "admin_users.html", base_ctx(request, users=users)
         )
 
+    @app.get("/admin/treasury", response_class=HTMLResponse)
+    def admin_treasury(request: Request):
+        user = current_user(request)
+        if not user:
+            return RedirectResponse("/login", status_code=303)
+        if not is_primary_admin(user):
+            raise HTTPException(403, "Only the admin account can view treasury")
+        stats = service.treasury_stats()
+        return templates.TemplateResponse(
+            request,
+            "admin_treasury.html",
+            base_ctx(request, treasury=stats),
+        )
+
     @app.post("/admin/users/{user_id}/reset-password")
     def admin_reset_password(
         request: Request, user_id: int, csrf_token: str = Form("")
@@ -410,17 +445,35 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         )
 
     @app.post("/proposals/new")
-    def proposal_new_post(
+    async def proposal_new_post(
         request: Request,
         headline: str = Form(...),
         category: str = Form(...),
-        funds_target: str = Form(...),
         content: str = Form(...),
+        funds_target: str = Form(""),
         payout_address: str = Form(""),
+        target_PDC: str = Form(""),
+        target_BTCX: str = Form(""),
+        target_BTC: str = Form(""),
+        payout_PDC: str = Form(""),
+        payout_BTCX: str = Form(""),
+        payout_BTC: str = Form(""),
     ):
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
+        form = await request.form()
+        selected = [str(v) for v in form.getlist("assets") if str(v).strip()]
+        targets = {
+            ASSET_PDC: target_PDC,
+            "BTCX": target_BTCX,
+            ASSET_BTC: target_BTC,
+        }
+        payouts = {
+            ASSET_PDC: payout_PDC or payout_address,
+            "BTCX": payout_BTCX or payout_address,
+            ASSET_BTC: payout_BTC or payout_address,
+        }
         try:
             proposal = service.create_proposal(
                 user,
@@ -429,6 +482,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 category=category,
                 funds_target=funds_target,
                 payout_address=payout_address,
+                assets=selected or None,
+                targets=targets if selected else None,
+                payout_addresses=payouts if selected else None,
             )
         except ValueError as exc:
             flash(request, str(exc), "error")
@@ -468,6 +524,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 available_usd=atomic_to_usd(progress["available_atomic"], pdc_usd),
                 target_usd=atomic_to_usd(progress["target_atomic"], pdc_usd),
                 transfer_fee_atomic=settings.transfer_fee_atomic,
+                btcx_transfer_fee_atomic=settings.btcx_transfer_fee_atomic,
+                btc_transfer_fee_sats=settings.btc_transfer_fee_sats,
+                proposal_assets=progress.get("assets") or [],
             ),
         )
 
@@ -517,6 +576,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         amount: str = Form(...),
         to_address: str = Form(""),
         milestone_note: str = Form(""),
+        asset: str = Form(ASSET_PDC),
         csrf_token: str = Form(""),
     ):
         user = current_user(request)
@@ -532,12 +592,14 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 amount=amount,
                 to_address=to_address or None,
                 milestone_note=milestone_note,
+                asset=asset,
             )
+            ticker = result.get("asset") or ASSET_PDC
             flash(
                 request,
-                f"Payout sent: {format_amount(result['send_atomic'])} PDC "
-                f"(escrow −{format_amount(result['amount_atomic'])}, "
-                f"fee {format_amount(result['fee_atomic'])}; "
+                f"Payout sent: {format_amount_asset(result['send_atomic'], ticker)} {ticker} "
+                f"(escrow −{format_amount_asset(result['amount_atomic'], ticker)}, "
+                f"fee {format_amount_asset(result['fee_atomic'], ticker)}; "
                 f"tx {result['tx_hash'][:16]}…)",
                 "ok",
             )
@@ -583,6 +645,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         return {
             "ok": True,
             "wallet": "live" if settings.wallet_enabled else "dry-run",
+            "btc_wallet": "live" if settings.btc_enabled else "dry-run",
+            "assets": list(SUPPORTED_ASSETS),
             "site": settings.site_name,
         }
 

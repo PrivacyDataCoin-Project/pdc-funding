@@ -10,8 +10,22 @@ from typing import Optional
 import bcrypt
 
 from funding.amounts import format_amount, funding_pct, parse_amount
+from funding.assets import (
+    ASSET_BTC,
+    ASSET_BTCX,
+    ASSET_PDC,
+    ASSETS,
+    asset_id_for,
+    format_amount as format_amount_asset,
+    normalize_asset,
+    parse_amount as parse_amount_asset,
+    parse_assets_csv,
+)
+from funding.btc_wallet import BtcWalletClient, BtcWalletError, BtcWalletRejected
 from funding.config import CATEGORIES, STATUSES, Settings
 from funding.db import Comment, Database, Proposal, User
+from funding.fee_convert import FeeCoverPlan, plan_pdc_fee_cover
+from funding.prices import fetch_prices
 from funding.totp import (
     decrypt_secret,
     derive_kek,
@@ -61,10 +75,17 @@ Skills and experience.
 
 
 class FundingService:
-    def __init__(self, settings: Settings, db: Database, wallet: WalletClient) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        db: Database,
+        wallet: WalletClient,
+        btc_wallet: BtcWalletClient | None = None,
+    ) -> None:
         self.settings = settings
         self.db = db
         self.wallet = wallet
+        self.btc_wallet = btc_wallet or BtcWalletClient(settings)
         self._totp_kek = derive_kek(settings.funding_totp_kek)
 
     def bootstrap_admin(self) -> None:
@@ -232,8 +253,11 @@ class FundingService:
         headline: str,
         content: str,
         category: str,
-        funds_target: str,
+        funds_target: str = "",
         payout_address: str = "",
+        assets: Optional[list[str]] = None,
+        targets: Optional[dict[str, str]] = None,
+        payout_addresses: Optional[dict[str, str]] = None,
     ) -> Proposal:
         if not headline.strip() or len(headline.strip()) > 200:
             raise ValueError("headline required (max 200 chars)")
@@ -243,31 +267,117 @@ class FundingService:
             raise ValueError("content too long")
         if category not in CATEGORIES:
             raise ValueError(f"category must be one of: {', '.join(CATEGORIES)}")
-        if len((payout_address or "").strip()) > _MAX_ADDRESS_CHARS:
-            raise ValueError("payout address too long")
-        target = parse_amount(funds_target)
-        return self.db.create_proposal(
+        selected = parse_assets_csv(assets) if assets is not None else []
+        targets = dict(targets or {})
+        payout_addresses = dict(payout_addresses or {})
+        # Backward compatible: single funds_target ⇒ PDC only.
+        if not selected:
+            if not (funds_target or "").strip():
+                raise ValueError("select at least one asset and target")
+            selected = [ASSET_PDC]
+            targets = {ASSET_PDC: funds_target}
+            if payout_address:
+                payout_addresses = {ASSET_PDC: payout_address}
+        # BTCX L1 network fee is paid in PDC from this proposal's escrow — ensure
+        # a PDC fee lane exists so payouts stay autonomous (no external fee float).
+        if ASSET_BTCX in selected and ASSET_PDC not in selected:
+            selected = [ASSET_PDC, *selected]
+            fee_human = format_amount_asset(
+                int(self.settings.transfer_fee_atomic), ASSET_PDC
+            )
+            targets.setdefault(ASSET_PDC, fee_human)
+            payout_addresses.setdefault(
+                ASSET_PDC, payout_addresses.get(ASSET_BTCX) or payout_address or ""
+            )
+        parsed: list[tuple[str, int, str]] = []
+        for ticker in selected:
+            raw_amt = (targets.get(ticker) or "").strip()
+            if not raw_amt:
+                raise ValueError(f"target amount required for {ticker}")
+            atomic = parse_amount_asset(raw_amt, ticker)
+            if ticker == ASSET_PDC and ASSET_BTCX in selected:
+                min_fee = int(self.settings.transfer_fee_atomic)
+                if atomic < min_fee:
+                    raise ValueError(
+                        "PDC target must cover at least one L1 network fee "
+                        f"({format_amount_asset(min_fee, ASSET_PDC)} PDC) "
+                        "because BTCX payouts debit fee from this proposal's PDC escrow"
+                    )
+            addr = (payout_addresses.get(ticker) or payout_address or "").strip()
+            if len(addr) > _MAX_ADDRESS_CHARS:
+                raise ValueError(f"payout address too long for {ticker}")
+            parsed.append((ticker, atomic, addr))
+        # Legacy header columns keep the first / PDC target for list UI.
+        primary = next((p for p in parsed if p[0] == ASSET_PDC), parsed[0])
+        proposal = self.db.create_proposal(
             user_id=user.id,
             headline=headline,
             content=content,
             category=category,
-            funds_target_atomic=target,
-            payout_address=payout_address,
+            funds_target_atomic=primary[1],
+            payout_address=primary[2],
             status=1,
         )
+        for ticker, atomic, addr in parsed:
+            existing = self.db.get_proposal_asset(proposal.id, ticker)
+            if existing:
+                continue
+            self.db.add_proposal_asset(
+                proposal_id=proposal.id,
+                asset=ticker,
+                funds_target_atomic=atomic,
+                payout_address=addr,
+            )
+        refreshed = self.db.get_proposal(proposal.id)
+        assert refreshed is not None
+        return refreshed
 
     def ensure_donation_address(self, proposal: Proposal) -> Proposal:
-        """Assign payment_id + integrated address when proposal enters funding."""
-        if proposal.payment_id and proposal.integrated_address:
-            return proposal
+        """Assign deposit addresses for each selected asset when funding opens."""
         if proposal.status < 2:
             return proposal
-        address, pid = self.wallet.make_integrated_address()
-        if not self.db.set_donation_address_if_empty(proposal.id, pid, address):
-            refreshed = self.db.get_proposal(proposal.id)
-            if refreshed and refreshed.payment_id and refreshed.integrated_address:
-                return refreshed
-            raise RuntimeError("could not assign donation address")
+        assets = self.db.list_proposal_assets(proposal.id)
+        if not assets:
+            # Legacy proposal without rows — treat as PDC.
+            self.db.add_proposal_asset(
+                proposal_id=proposal.id,
+                asset=ASSET_PDC,
+                funds_target_atomic=int(proposal.funds_target_atomic),
+                payout_address=proposal.payout_address,
+            )
+            assets = self.db.list_proposal_assets(proposal.id)
+
+        # One shared L1 integrated address for all PDC-chain assets on this proposal.
+        l1_assets = [a for a in assets if ASSETS[a.asset].chain == "pdc"]
+        shared_pid = ""
+        shared_addr = ""
+        for a in l1_assets:
+            if a.payment_id and a.integrated_address:
+                shared_pid = a.payment_id
+                shared_addr = a.integrated_address
+                break
+        if not shared_pid and proposal.payment_id and proposal.integrated_address:
+            shared_pid = proposal.payment_id
+            shared_addr = proposal.integrated_address
+        if l1_assets and not shared_pid:
+            shared_addr, shared_pid = self.wallet.make_integrated_address()
+        for a in l1_assets:
+            if a.payment_id and a.integrated_address:
+                continue
+            self.db.set_asset_l1_address_if_empty(
+                proposal.id, a.asset, shared_pid, shared_addr
+            )
+
+        for a in assets:
+            if a.asset != ASSET_BTC:
+                continue
+            if a.btc_address:
+                continue
+            addr = self.btc_wallet.getnewaddress(
+                label=f"funding-proposal-{proposal.id}"
+            )
+            self.db.set_asset_btc_address_if_empty(proposal.id, addr)
+
         refreshed = self.db.get_proposal(proposal.id)
         if not refreshed:
             raise RuntimeError("proposal vanished after address assign")
@@ -287,23 +397,75 @@ class FundingService:
             proposal = self.ensure_donation_address(proposal)
         return proposal
 
-    def available_atomic(self, proposal: Proposal) -> int:
-        return max(0, int(proposal.received_atomic) - int(proposal.paid_atomic))
+    def available_atomic(self, proposal: Proposal, asset: str = ASSET_PDC) -> int:
+        row = self.db.get_proposal_asset(proposal.id, asset)
+        if not row:
+            if asset == ASSET_PDC:
+                return max(0, int(proposal.received_atomic) - int(proposal.paid_atomic))
+            return 0
+        return max(0, int(row.received_atomic) - int(row.paid_atomic))
 
     def progress(self, proposal: Proposal) -> dict:
-        received = int(proposal.received_atomic)
-        paid = int(proposal.paid_atomic)
-        pending = int(getattr(proposal, "pending_atomic", 0) or 0)
-        available = max(0, received - paid)
+        assets = self.db.list_proposal_assets(proposal.id)
+        per_asset = []
+        for row in assets:
+            available = max(0, int(row.received_atomic) - int(row.paid_atomic))
+            per_asset.append(
+                {
+                    "asset": row.asset,
+                    "received_atomic": int(row.received_atomic),
+                    "paid_atomic": int(row.paid_atomic),
+                    "pending_atomic": int(row.pending_atomic),
+                    "available_atomic": available,
+                    "target_atomic": int(row.funds_target_atomic),
+                    "pct": funding_pct(
+                        int(row.received_atomic), int(row.funds_target_atomic)
+                    ),
+                    "paid_pct": funding_pct(
+                        int(row.paid_atomic), int(row.received_atomic)
+                    )
+                    if row.received_atomic > 0
+                    else 0.0,
+                    "payment_id": row.payment_id,
+                    "integrated_address": row.integrated_address,
+                    "btc_address": row.btc_address,
+                    "payout_address": row.payout_address,
+                }
+            )
+        # Legacy aggregate (PDC-first) for templates that still use top-level fields.
+        pdc = next((a for a in per_asset if a["asset"] == ASSET_PDC), None)
+        primary = pdc or (per_asset[0] if per_asset else None)
+        if primary is None:
+            received = int(proposal.received_atomic)
+            paid = int(proposal.paid_atomic)
+            pending = int(getattr(proposal, "pending_atomic", 0) or 0)
+            available = max(0, received - paid)
+            return {
+                "received_atomic": received,
+                "paid_atomic": paid,
+                "pending_atomic": pending,
+                "available_atomic": available,
+                "target_atomic": int(proposal.funds_target_atomic),
+                "pct": funding_pct(received, int(proposal.funds_target_atomic)),
+                "paid_pct": funding_pct(paid, received) if received > 0 else 0.0,
+                "assets": [],
+            }
         return {
-            "received_atomic": received,
-            "paid_atomic": paid,
-            "pending_atomic": pending,
-            "available_atomic": available,
-            "target_atomic": int(proposal.funds_target_atomic),
-            "pct": funding_pct(received, int(proposal.funds_target_atomic)),
-            "paid_pct": funding_pct(paid, received) if received > 0 else 0.0,
+            **primary,
+            "assets": per_asset,
         }
+
+    def _fee_for_asset(self, asset: str) -> int:
+        """Escrow fee deducted in the same asset as the payout.
+
+        PDC: L1 fee from PDC escrow. BTCX: 0 on BTCX ledger (L1 fee reserved
+        separately from this proposal's PDC escrow). BTC: 0 (miner fee taken
+        from the sent amount via subtractfeefromamount).
+        """
+        ticker = normalize_asset(asset)
+        if ticker == ASSET_PDC:
+            return int(self.settings.transfer_fee_atomic)
+        return 0
 
     def payout_milestone(
         self,
@@ -313,98 +475,246 @@ class FundingService:
         amount: str,
         to_address: Optional[str] = None,
         milestone_note: str = "",
+        asset: str = ASSET_PDC,
     ) -> dict:
+        """Pay a milestone from this proposal's funded escrow only (hard fee model)."""
         self.require_primary_admin(actor)
+        ticker = normalize_asset(asset)
         proposal = self.db.get_proposal(proposal_id)
         if not proposal:
             raise KeyError("proposal not found")
         if proposal.status not in (2, 3, 4):
             raise ValueError("proposal must be funding/wip/completed to pay out")
+        asset_row = self.db.get_proposal_asset(proposal.id, ticker)
+        if not asset_row:
+            raise ValueError(f"proposal has no {ticker} target")
         note = (milestone_note or "").strip()
         if len(note) > _MAX_NOTE_CHARS:
             raise ValueError("note too long")
-        amount_atomic = parse_amount(amount)
-        fee_atomic = int(self.settings.transfer_fee_atomic)
-        if amount_atomic <= fee_atomic:
-            raise ValueError(
-                f"amount must be greater than transfer fee "
-                f"({format_amount(fee_atomic)} PDC)"
-            )
-        send_atomic = amount_atomic - fee_atomic
-        dest = (to_address or proposal.payout_address or "").strip()
+        amount_atomic = parse_amount_asset(amount, ticker)
+        l1_fee = int(self.settings.transfer_fee_atomic)
+        fee_atomic = self._fee_for_asset(ticker)
+        fee_plan: Optional[FeeCoverPlan] = None
+        # Hard model: every network cost is covered by this proposal's escrow.
+        # PDC: amount includes fee → recipient gets amount − fee.
+        # BTCX: full BTCX to recipient; L1 fee from PDC escrow, else oracle-convert
+        #        from leftover BTCX/BTC on the same proposal.
+        # BTC: full amount reserved; miner fee subtracted from amount on-chain.
+        if ticker == ASSET_PDC:
+            if amount_atomic <= fee_atomic:
+                raise ValueError(
+                    f"amount must be greater than transfer fee "
+                    f"({format_amount_asset(fee_atomic, ASSET_PDC)} PDC)"
+                )
+            send_atomic = amount_atomic - fee_atomic
+        elif ticker == ASSET_BTCX:
+            send_atomic = amount_atomic
+            if l1_fee > 0:
+                btcx_avail = self.available_atomic(proposal, ASSET_BTCX)
+                if btcx_avail < amount_atomic:
+                    raise ValueError("amount exceeds available BTCX escrow balance")
+                pdc_avail = self.available_atomic(proposal, ASSET_PDC)
+                btcx_left = btcx_avail - amount_atomic
+                btc_left = self.available_atomic(proposal, ASSET_BTC)
+                book = fetch_prices(self.settings)
+                fee_plan = plan_pdc_fee_cover(
+                    l1_fee,
+                    available_pdc=pdc_avail,
+                    available_btcx=btcx_left,
+                    available_btc=btc_left,
+                    book=book,
+                )
+        else:  # BTC
+            min_btc = max(int(self.settings.btc_transfer_fee_sats), 546)
+            if amount_atomic <= min_btc:
+                raise ValueError(
+                    "BTC amount must exceed dust/miner floor "
+                    f"({format_amount_asset(min_btc, ASSET_BTC)} BTC)"
+                )
+            send_atomic = amount_atomic
+            fee_atomic = 0
+        if send_atomic <= 0:
+            raise ValueError("send amount must be positive after fee")
+        dest = (to_address or asset_row.payout_address or proposal.payout_address or "").strip()
         if not dest:
             raise ValueError("payout address required")
         if len(dest) > _MAX_ADDRESS_CHARS:
             raise ValueError("payout address too long")
-        if self.wallet.enabled:
+
+        if ticker in (ASSET_PDC, ASSET_BTCX):
+            if self.wallet.enabled:
+                try:
+                    dest = self.wallet.resolve_destination(dest)
+                except WalletError as exc:
+                    raise RuntimeError(str(exc)) from exc
+                try:
+                    unlocked = self.wallet.get_unlocked_atomic(
+                        asset_id=asset_id_for(self.settings, ticker)
+                    )
+                except WalletError as exc:
+                    raise RuntimeError(str(exc)) from exc
+                need = amount_atomic if ticker == ASSET_PDC else send_atomic
+                if fee_plan and fee_plan.btcx_from_escrow:
+                    need += int(fee_plan.btcx_from_escrow)
+                if unlocked < need:
+                    raise ValueError(
+                        f"hot wallet unlocked {ticker} is "
+                        f"{format_amount_asset(unlocked, ticker)}; need "
+                        f"{format_amount_asset(need, ticker)}"
+                    )
+                if ticker == ASSET_BTCX and l1_fee > 0:
+                    try:
+                        pdc_unlocked = self.wallet.get_unlocked_atomic(
+                            asset_id=asset_id_for(self.settings, ASSET_PDC)
+                        )
+                    except WalletError as exc:
+                        raise RuntimeError(str(exc)) from exc
+                    if pdc_unlocked < l1_fee:
+                        raise ValueError(
+                            "hot wallet unlocked PDC is "
+                            f"{format_amount_asset(pdc_unlocked, ASSET_PDC)}; "
+                            "need "
+                            f"{format_amount_asset(l1_fee, ASSET_PDC)} PDC "
+                            "liquid for L1 fee. Escrow may cover via BTCX/BTC "
+                            "conversion, but the funding L1 wallet still needs a "
+                            "PDC fee buffer (top up once; later BTCX converts "
+                            "reimburse the pool)"
+                        )
+        elif ticker == ASSET_BTC and self.btc_wallet.enabled:
             try:
-                dest = self.wallet.resolve_destination(dest)
-            except WalletError as exc:
+                unlocked = self.btc_wallet.get_balance_sats()
+            except BtcWalletError as exc:
                 raise RuntimeError(str(exc)) from exc
-        # Escrow is charged the full amount; recipient gets amount − fee.
-        # Wallet debit is send + fee == amount_atomic.
-        if self.wallet.enabled:
-            try:
-                unlocked = self.wallet.get_unlocked_atomic()
-            except WalletError as exc:
-                raise RuntimeError(str(exc)) from exc
-            if unlocked < amount_atomic:
+            need_btc = amount_atomic
+            if fee_plan and fee_plan.btc_from_escrow:
+                need_btc += int(fee_plan.btc_from_escrow)
+            if unlocked < need_btc:
                 raise ValueError(
-                    "hot wallet unlocked balance is "
-                    f"{format_amount(unlocked)} PDC; need "
-                    f"{format_amount(amount_atomic)} PDC "
-                    f"(payout {format_amount(send_atomic)} + fee "
-                    f"{format_amount(fee_atomic)}). Escrow remaining can "
-                    "exceed the wallet when older fees were not charged "
-                    "to the proposal — top up the wallet or pay a smaller amount"
+                    f"BTC wallet unlocked is {format_amount_asset(unlocked, ASSET_BTC)}; "
+                    f"need {format_amount_asset(need_btc, ASSET_BTC)}"
                 )
-        payout_id = self.db.reserve_payout(
-            proposal_id=proposal.id,
-            amount_atomic=amount_atomic,
-            to_address=dest,
-            milestone_note=note,
-            created_by=actor.id,
-        )
+
+        reserved_ids: list[int] = []
         try:
-            tx_hash = self.wallet.transfer(
-                dest,
-                send_atomic,
-                comment=f"pdc-funding proposal #{proposal.id}: {note}"[:120],
+            payout_id = self.db.reserve_payout(
+                proposal_id=proposal.id,
+                amount_atomic=amount_atomic,
+                to_address=dest,
+                milestone_note=note,
+                created_by=actor.id,
+                asset=ticker,
             )
-        except WalletRejected as exc:
-            self._release_reservation(payout_id)
+            reserved_ids.append(payout_id)
+            if ticker == ASSET_BTCX and fee_plan and l1_fee > 0:
+                if fee_plan.pdc_from_escrow > 0:
+                    reserved_ids.append(
+                        self.db.reserve_payout(
+                            proposal_id=proposal.id,
+                            amount_atomic=fee_plan.pdc_from_escrow,
+                            to_address="l1-network-fee",
+                            milestone_note=(
+                                f"L1 fee PDC for BTCX payout ({note})"
+                            )[:_MAX_NOTE_CHARS],
+                            created_by=actor.id,
+                            asset=ASSET_PDC,
+                        )
+                    )
+                if fee_plan.btcx_from_escrow > 0:
+                    reserved_ids.append(
+                        self.db.reserve_payout(
+                            proposal_id=proposal.id,
+                            amount_atomic=fee_plan.btcx_from_escrow,
+                            to_address="l1-fee-convert",
+                            milestone_note=(
+                                f"L1 fee convert BTCX→PDC ({note})"
+                            )[:_MAX_NOTE_CHARS],
+                            created_by=actor.id,
+                            asset=ASSET_BTCX,
+                        )
+                    )
+                if fee_plan.btc_from_escrow > 0:
+                    reserved_ids.append(
+                        self.db.reserve_payout(
+                            proposal_id=proposal.id,
+                            amount_atomic=fee_plan.btc_from_escrow,
+                            to_address="l1-fee-convert",
+                            milestone_note=(
+                                f"L1 fee convert BTC→PDC ({note})"
+                            )[:_MAX_NOTE_CHARS],
+                            created_by=actor.id,
+                            asset=ASSET_BTC,
+                        )
+                    )
+        except Exception:
+            for rid in reserved_ids:
+                self._release_reservation(rid)
+            raise
+
+        try:
+            if ticker == ASSET_BTC:
+                tx_hash = self.btc_wallet.send_to_address(
+                    dest,
+                    send_atomic,
+                    comment=f"pdc-funding #{proposal.id}: {note}"[:100],
+                    subtract_fee_from_amount=True,
+                )
+            else:
+                tx_hash = self.wallet.transfer(
+                    dest,
+                    send_atomic,
+                    comment=f"pdc-funding proposal #{proposal.id}: {note}"[:120],
+                    asset_id=asset_id_for(self.settings, ticker),
+                    fee_atomic=l1_fee if l1_fee > 0 else 0,
+                )
+        except (WalletRejected, BtcWalletRejected) as exc:
+            for rid in reserved_ids:
+                self._release_reservation(rid)
             raise RuntimeError(str(exc)) from exc
         except ValueError:
-            self._release_reservation(payout_id)
+            for rid in reserved_ids:
+                self._release_reservation(rid)
             raise
-        except WalletError as exc:
+        except (WalletError, BtcWalletError) as exc:
             logger.error(
-                "payout reservation %s kept after uncertain wallet result: %s",
-                payout_id,
+                "payout reservations %s kept after uncertain wallet result: %s",
+                reserved_ids,
                 exc,
             )
             raise RuntimeError(
-                f"payout may have been broadcast (reservation {payout_id}); "
+                f"payout may have been broadcast (reservations {reserved_ids}); "
                 "escrow stays reserved until an operator reconciles"
             ) from exc
         try:
-            payout = self.db.finalize_payout(payout_id, tx_hash)
+            payout = self.db.finalize_payout(reserved_ids[0], tx_hash)
+            for rid in reserved_ids[1:]:
+                self.db.finalize_payout(rid, tx_hash)
         except Exception as exc:
             logger.error(
-                "payout reservation %s broadcast as %s but was not finalized",
-                payout_id,
+                "payout reservations %s broadcast as %s but not finalized",
+                reserved_ids,
                 tx_hash,
             )
             raise RuntimeError(
-                f"payout broadcast as {tx_hash} but reservation {payout_id} "
-                "was not finalized"
+                f"payout broadcast as {tx_hash} but reservations {reserved_ids} "
+                "were not finalized"
             ) from exc
         return {
             "payout_id": payout.id,
             "tx_hash": payout.tx_hash,
             "amount_atomic": payout.amount_atomic,
             "send_atomic": send_atomic,
-            "fee_atomic": fee_atomic,
+            "fee_atomic": l1_fee if ticker == ASSET_BTCX else fee_atomic,
+            "fee_asset": ASSET_PDC if ticker in (ASSET_PDC, ASSET_BTCX) else ASSET_BTC,
+            "fee_cover": (
+                {
+                    "pdc": fee_plan.pdc_from_escrow,
+                    "btcx": fee_plan.btcx_from_escrow,
+                    "btc": fee_plan.btc_from_escrow,
+                }
+                if fee_plan
+                else None
+            ),
+            "asset": ticker,
             "to_address": payout.to_address,
         }
 
@@ -413,6 +723,126 @@ class FundingService:
             self.db.release_payout(payout_id)
         except Exception:
             logger.exception("failed to release payout reservation %s", payout_id)
+
+    def treasury_stats(self) -> dict:
+        """Hot-wallet balances + per-proposal escrow ledger for admin panel."""
+        hot: dict[str, dict] = {}
+        for ticker in (ASSET_PDC, ASSET_BTCX):
+            entry: dict = {
+                "asset": ticker,
+                "unlocked_atomic": 0,
+                "mode": "dry-run",
+                "error": None,
+            }
+            if self.wallet.enabled:
+                entry["mode"] = "live"
+                try:
+                    entry["unlocked_atomic"] = int(
+                        self.wallet.get_unlocked_atomic(
+                            asset_id=asset_id_for(self.settings, ticker)
+                        )
+                    )
+                except WalletError as exc:
+                    entry["error"] = str(exc)
+            hot[ticker] = entry
+
+        btc_entry: dict = {
+            "asset": ASSET_BTC,
+            "unlocked_atomic": 0,
+            "mode": "dry-run",
+            "error": None,
+            "wallet_name": self.btc_wallet.wallet_name,
+        }
+        if self.btc_wallet.enabled:
+            btc_entry["mode"] = "live"
+            try:
+                btc_entry["unlocked_atomic"] = int(self.btc_wallet.get_balance_sats())
+            except BtcWalletError as exc:
+                btc_entry["error"] = str(exc)
+        hot[ASSET_BTC] = btc_entry
+
+        proposals = self.db.list_proposals(limit=500, offset=0)
+        per_proposal: list[dict] = []
+        escrow_totals = {
+            ASSET_PDC: {"received": 0, "paid": 0, "pending": 0, "available": 0},
+            ASSET_BTCX: {"received": 0, "paid": 0, "pending": 0, "available": 0},
+            ASSET_BTC: {"received": 0, "paid": 0, "pending": 0, "available": 0},
+        }
+        for prop in proposals:
+            assets = self.db.list_proposal_assets(prop.id)
+            rows = []
+            for row in assets:
+                received = int(row.received_atomic)
+                paid = int(row.paid_atomic)
+                pending = int(row.pending_atomic)
+                available = max(0, received - paid)
+                ticker = row.asset
+                if ticker in escrow_totals:
+                    escrow_totals[ticker]["received"] += received
+                    escrow_totals[ticker]["paid"] += paid
+                    escrow_totals[ticker]["pending"] += pending
+                    escrow_totals[ticker]["available"] += available
+                rows.append(
+                    {
+                        "asset": ticker,
+                        "received_atomic": received,
+                        "paid_atomic": paid,
+                        "pending_atomic": pending,
+                        "available_atomic": available,
+                        "target_atomic": int(row.funds_target_atomic),
+                        "payment_id": row.payment_id,
+                        "btc_address": row.btc_address,
+                        "integrated_address": row.integrated_address,
+                    }
+                )
+            if not rows and (prop.received_atomic or prop.paid_atomic):
+                # Legacy header-only view
+                received = int(prop.received_atomic)
+                paid = int(prop.paid_atomic)
+                pending = int(getattr(prop, "pending_atomic", 0) or 0)
+                available = max(0, received - paid)
+                escrow_totals[ASSET_PDC]["received"] += received
+                escrow_totals[ASSET_PDC]["paid"] += paid
+                escrow_totals[ASSET_PDC]["pending"] += pending
+                escrow_totals[ASSET_PDC]["available"] += available
+                rows.append(
+                    {
+                        "asset": ASSET_PDC,
+                        "received_atomic": received,
+                        "paid_atomic": paid,
+                        "pending_atomic": pending,
+                        "available_atomic": available,
+                        "target_atomic": int(prop.funds_target_atomic),
+                        "payment_id": prop.payment_id,
+                        "btc_address": "",
+                        "integrated_address": prop.integrated_address,
+                    }
+                )
+            per_proposal.append(
+                {
+                    "id": prop.id,
+                    "headline": prop.headline,
+                    "status": prop.status,
+                    "status_label": STATUSES.get(prop.status, str(prop.status)),
+                    "author": prop.author,
+                    "assets": rows,
+                }
+            )
+
+        unallocated = {}
+        for ticker, tot in escrow_totals.items():
+            hot_unlocked = int(hot[ticker]["unlocked_atomic"])
+            # Coins in hot wallet beyond open escrow available (fees buffer / dust / other).
+            unallocated[ticker] = hot_unlocked - int(tot["available"])
+
+        return {
+            "hot": hot,
+            "escrow_totals": escrow_totals,
+            "unallocated": unallocated,
+            "proposals": per_proposal,
+            "l1_wallet_enabled": self.wallet.enabled,
+            "btc_wallet_enabled": self.btc_wallet.enabled,
+        }
 
     def add_comment(self, user: User, proposal_id: int, message: str) -> Comment:
         if not message.strip():

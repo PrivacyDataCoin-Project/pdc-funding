@@ -16,9 +16,19 @@ class CaptureWallet(WalletClient):
     def resolve_destination(self, address_or_alias: str) -> str:
         return address_or_alias.strip()
 
-    def transfer(self, address: str, amount_atomic: int, comment: str = "") -> str:
+    def transfer(
+        self,
+        address: str,
+        amount_atomic: int,
+        comment: str = "",
+        *,
+        asset_id: str | None = None,
+        fee_atomic: int | None = None,
+    ) -> str:
         self.last_address = address
         self.last_amount = amount_atomic
+        self.last_asset_id = asset_id
+        self.last_fee_atomic = fee_atomic
         return "tx_fee_test"
 
 
@@ -106,7 +116,7 @@ def test_payout_rejects_when_wallet_unlocked_too_low(tmp_path: Path):
         def get_unlocked_atomic(self, asset_id=None) -> int:
             return int(0.49 * ATOMIC)
 
-        def transfer(self, address: str, amount_atomic: int, comment: str = "") -> str:
+        def transfer(self, address: str, amount_atomic: int, comment: str = "", **kwargs) -> str:
             raise AssertionError("transfer must not run when unlocked is short")
 
     svc.wallet = LowBal(svc.settings)

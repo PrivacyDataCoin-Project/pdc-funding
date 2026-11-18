@@ -33,9 +33,27 @@ BOOTSTRAP_ADMIN_PASSWORD=<initial>
 BOOTSTRAP_ADMIN_EMAIL=admin@example.com
 WALLET_RPC_URL=          # empty = dry-run until escrow wallet is ready
 DAEMON_RPC_URL=http://127.0.0.1:19211
+BTCX_ASSET_ID=c2bf0410873b49ec7e7dd19d62bca9625d80cd3123670a67b48d997d3127426d
+BTC_RPC_URL=             # empty = BTC dry-run; set after setup-funding-btc-wallet.sh
+BTC_WALLET_NAME=funding
 ```
 
-Keep escrow wallet separate from tipbot. Surplus cold.
+Keep L1 escrow wallet separate from tipbot. Native BTC uses a **new** bitcoind wallet `funding` (never copy `bridge`). Surplus cold.
+
+## Secrets layout (`/etc/pdc-secrets`)
+
+| File | Purpose |
+| --- | --- |
+| `funding-wallet.pass` / `.seed` / `.address` | L1 simplewallet |
+| `funding-btc.wallet-name` | bitcoind wallet name (`funding`) |
+| `funding-btc.rpc-url` / `.rpc-user` / `.rpc-pass` | Bitcoin RPC auth |
+| `funding-btc.descriptors.json` | wallet descriptor backup |
+| `funding-btc.sample-address` | ops connectivity check only |
+
+```bash
+sudo ./deploy/setup-funding-btc-wallet.sh
+# Then wire BTC_* into .env from those files (do not commit).
+```
 
 ## Install / update
 

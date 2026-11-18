@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Montserrat:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=pdc-2fa-1">
+  <link rel="stylesheet" href="/static/style.css?v=pdc-treasury-1">
 </head>
 <body>
   <div class="wrap">
@@ -19,7 +19,10 @@
         {% if user %}
           <a href="/proposals/new">New proposal</a>
           <a href="/account/password">Password</a>
-          {% if is_primary_admin %}<a href="/admin/users">Users</a>{% endif %}
+          {% if is_primary_admin %}
+            <a href="/admin/treasury">Treasury</a>
+            <a href="/admin/users">Users</a>
+          {% endif %}
           <span class="pill">{{ user.username }} · {{ user.email }}{% if user.is_admin %} · admin{% endif %}</span>
           <form action="/logout" method="post" style="display:inline">
             <button class="linkish" type="submit">Log out</button>

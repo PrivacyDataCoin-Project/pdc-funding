@@ -3,7 +3,7 @@
 {% block body %}
 <section class="panel">
   <h1>New proposal</h1>
-  <p class="lede">Describe the work, cost in PDC, and milestones. An admin moves it to funding when ready.</p>
+  <p class="lede">Describe the work and pick one or more funding assets (PDC, BTCX, BTC) with targets and payout destinations.</p>
   <form method="post" action="/proposals/new">
     <label for="headline">Headline</label>
     <input id="headline" name="headline" required maxlength="200">
@@ -15,11 +15,20 @@
       {% endfor %}
     </select>
 
-    <label for="funds_target">Funding target (PDC)</label>
-    <input id="funds_target" name="funds_target" required placeholder="100.5">
-
-    <label for="payout_address">Payout address or @alias (optional)</label>
-    <input id="payout_address" name="payout_address" placeholder="@you or standard address">
+    <fieldset class="asset-pick">
+      <legend>Funding assets</legend>
+      <p class="stat-sub">Select at least one. BTCX auto-adds a PDC fee lane (L1 network fee is paid from that proposal’s PDC escrow). BTC miner fee comes from the BTC payout amount.</p>
+      {% for ticker in supported_assets %}
+      <div class="asset-row">
+        <label class="check">
+          <input type="checkbox" name="assets" value="{{ ticker }}" {% if ticker == 'PDC' %}checked{% endif %}>
+          {{ ticker }}
+        </label>
+        <input name="target_{{ ticker }}" placeholder="Target {{ ticker }}" {% if ticker == 'PDC' %}required{% endif %}>
+        <input name="payout_{{ ticker }}" placeholder="Payout address / @alias for {{ ticker }}">
+      </div>
+      {% endfor %}
+    </fieldset>
 
     <label for="content">Proposal</label>
     <textarea id="content" name="content" required>{{ default_content }}</textarea>

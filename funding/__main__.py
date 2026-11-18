@@ -17,6 +17,15 @@ _PLACEHOLDER_SECRETS = frozenset(
         "test-secret",
     }
 )
+_PLACEHOLDER_TOTP_KEKS = frozenset(
+    {
+        "dev-only-funding-totp-kek-change-me",
+        "change-me",
+        "changeme",
+        "test",
+        "secret",
+    }
+)
 
 
 def _loopback(host: str) -> bool:
@@ -28,6 +37,11 @@ def ensure_bind_allowed(settings) -> None:
     if not _loopback(settings.bind_host) and secret in _PLACEHOLDER_SECRETS:
         raise SystemExit(
             "Refusing to bind a non-loopback host with a placeholder SECRET_KEY"
+        )
+    kek = (settings.funding_totp_kek or "").strip().lower()
+    if not _loopback(settings.bind_host) and kek in _PLACEHOLDER_TOTP_KEKS:
+        raise SystemExit(
+            "Refusing to bind a non-loopback host with a placeholder FUNDING_TOTP_KEK"
         )
 
 

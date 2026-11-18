@@ -4,7 +4,16 @@
 <section class="panel">
   <div class="status s{{ proposal.status }}">{{ statuses.get(proposal.status) }} · {{ proposal.category }}</div>
   <h1>{{ proposal.headline }}</h1>
-  <p class="lede">by {{ proposal.author }} · target {{ progress.target_atomic|pdc }} PDC{% if target_usd %} (≈ ${{ '%.2f'|format(target_usd) }}){% endif %}</p>
+  <p class="lede">by {{ proposal.author }}
+    {% if proposal_assets %}
+      · targets
+      {% for a in proposal_assets %}
+        {{ a.target_atomic|amt(a.asset) }} {{ a.asset }}{% if not loop.last %}, {% endif %}
+      {% endfor %}
+    {% else %}
+      · target {{ progress.target_atomic|pdc }} PDC{% if target_usd %} (≈ ${{ '%.2f'|format(target_usd) }}){% endif %}
+    {% endif %}
+  </p>
 
   <div class="grid-2">
     <div>
@@ -32,41 +41,46 @@
     </div>
 
     <aside>
+      {% for a in proposal_assets %}
+      <div class="aside-block">
+        <h3>{{ a.asset }} progress</h3>
+        <p class="stat-big">{{ '%.1f'|format(a.pct) }}%</p>
+        <p class="stat-sub">{{ a.received_atomic|amt(a.asset) }} / {{ a.target_atomic|amt(a.asset) }} {{ a.asset }}</p>
+        <div class="bar" data-pct="{{ '%.1f'|format(a.pct) }}" style="margin-top:0.75rem"><i></i></div>
+        <dl class="ledger" style="margin-top:0.85rem">
+          <div><dt>Received</dt><dd>{{ a.received_atomic|amt(a.asset) }} {{ a.asset }}</dd></div>
+          <div><dt>Paid out</dt><dd>{{ a.paid_atomic|amt(a.asset) }} {{ a.asset }}{% if a.pending_atomic %} <span class="faint">(incl. {{ a.pending_atomic|amt(a.asset) }} pending)</span>{% endif %}</dd></div>
+          <div class="ledger-remain"><dt>Remaining</dt><dd><strong>{{ a.available_atomic|amt(a.asset) }} {{ a.asset }}</strong></dd></div>
+        </dl>
+      </div>
+      {% else %}
       <div class="aside-block">
         <h3>Funding progress</h3>
         <p class="stat-big">{{ '%.1f'|format(progress.pct) }}%</p>
-        <p class="stat-sub">of target {{ progress.target_atomic|pdc }} PDC{% if target_usd %} (≈ ${{ '%.2f'|format(target_usd) }}){% endif %}</p>
+        <p class="stat-sub">of target {{ progress.target_atomic|pdc }} PDC</p>
         <div class="bar" data-pct="{{ '%.1f'|format(progress.pct) }}" style="margin-top:0.75rem"><i></i></div>
       </div>
+      {% endfor %}
 
-      <div class="aside-block">
-        <h3>Escrow status</h3>
-        <dl class="ledger">
-          <div>
-            <dt>Received</dt>
-            <dd>{{ progress.received_atomic|pdc }} PDC{% if received_usd %} <span class="faint">≈ ${{ '%.2f'|format(received_usd) }}</span>{% endif %}</dd>
-          </div>
-          <div>
-            <dt>Paid out</dt>
-            <dd>{{ progress.paid_atomic|pdc }} PDC{% if paid_usd %} <span class="faint">≈ ${{ '%.2f'|format(paid_usd) }}</span>{% endif %}{% if progress.pending_atomic %} <span class="faint">(incl. {{ progress.pending_atomic|pdc }} pending)</span>{% endif %}</dd>
-          </div>
-          <div class="ledger-remain">
-            <dt>Remaining to pay</dt>
-            <dd><strong>{{ progress.available_atomic|pdc }} PDC</strong>{% if available_usd %} <span class="faint">≈ ${{ '%.2f'|format(available_usd) }}</span>{% endif %}</dd>
-          </div>
-        </dl>
-        {% if progress.received_atomic > 0 %}
-        <div class="bar bar-paid" data-pct="{{ '%.1f'|format(progress.paid_pct) }}" title="Share of received already paid" style="margin-top:0.85rem"><i></i></div>
-        <p class="stat-sub">{{ '%.1f'|format(progress.paid_pct) }}% of received already paid</p>
-        {% endif %}
-      </div>
-
-      {% if proposal.integrated_address and proposal.status >= 2 %}
+      {% if proposal.status >= 2 %}
       <div class="aside-block">
         <h3>Donate</h3>
-        <div class="addr" id="donate-addr">{{ proposal.integrated_address }}</div>
-        <button class="btn ghost" type="button" data-copy="#donate-addr">Copy</button>
-        <p class="stat-sub" style="margin-top:0.5rem">Send only PDC native asset to this integrated address.</p>
+        {% for a in proposal_assets %}
+          {% if a.asset in ['PDC', 'BTCX'] and a.integrated_address %}
+            <p class="stat-sub">{{ a.asset }} — send to integrated address:</p>
+            <div class="addr" id="donate-{{ a.asset }}">{{ a.integrated_address }}</div>
+            <button class="btn ghost" type="button" data-copy="#donate-{{ a.asset }}">Copy {{ a.asset }}</button>
+          {% elif a.asset == 'BTC' and a.btc_address %}
+            <p class="stat-sub">BTC — send native Bitcoin to:</p>
+            <div class="addr" id="donate-BTC">{{ a.btc_address }}</div>
+            <button class="btn ghost" type="button" data-copy="#donate-BTC">Copy BTC</button>
+          {% endif %}
+        {% else %}
+          {% if proposal.integrated_address %}
+            <div class="addr" id="donate-addr">{{ proposal.integrated_address }}</div>
+            <button class="btn ghost" type="button" data-copy="#donate-addr">Copy</button>
+          {% endif %}
+        {% endfor %}
       </div>
       {% endif %}
 
@@ -76,8 +90,16 @@
         <ul class="tx-list">
           {% for d in deposits %}
             <li>
-              <span>+{{ d.amount_atomic|pdc }}</span>
-              <a href="{{ explorer_tx_url }}{{ d.tx_hash }}" target="_blank" rel="noopener noreferrer">{{ d.tx_hash[:10] }}…</a>
+              <span>+{{ d.amount_atomic|amt(d.asset) }} {{ d.asset }}</span>
+              {% if d.asset == 'BTC' %}
+                {% if d.tx_hash.startswith('btc:') %}
+                  <span class="faint">credited</span>
+                {% else %}
+                  <a href="{{ btc_explorer_tx_url }}{{ d.tx_hash }}" target="_blank" rel="noopener noreferrer">{{ d.tx_hash[:10] }}…</a>
+                {% endif %}
+              {% else %}
+                <a href="{{ explorer_tx_url }}{{ d.tx_hash }}" target="_blank" rel="noopener noreferrer">{{ d.tx_hash[:10] }}…</a>
+              {% endif %}
             </li>
           {% endfor %}
         </ul>
@@ -90,9 +112,11 @@
         <ul class="tx-list">
           {% for o in payouts %}
             <li>
-              <span>−{{ o.amount_atomic|pdc }}</span>
+              <span>−{{ o.amount_atomic|amt(o.asset) }} {{ o.asset }}</span>
               {% if o.tx_hash.startswith('pending:') %}
                 <span>pending</span>
+              {% elif o.asset == 'BTC' %}
+                <a href="{{ btc_explorer_tx_url }}{{ o.tx_hash }}" target="_blank" rel="noopener noreferrer">{{ o.tx_hash[:10] }}…</a>
               {% else %}
                 <a href="{{ explorer_tx_url }}{{ o.tx_hash }}" target="_blank" rel="noopener noreferrer">{{ o.tx_hash[:10] }}…</a>
               {% endif %}
@@ -117,14 +141,23 @@
         </form>
         <form method="post" action="/proposals/{{ proposal.id }}/payout" style="margin-top:1rem">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <label for="amount">Milestone payout (PDC)</label>
-          <input id="amount" name="amount" required placeholder="{{ progress.available_atomic|pdc }}" value="{% if progress.available_atomic %}{{ progress.available_atomic|pdc }}{% endif %}">
-          <p class="stat-sub">Max available now: {{ progress.available_atomic|pdc }} PDC. Recipient receives amount − {{ transfer_fee_atomic|pdc }} fee.</p>
+          <label for="asset">Asset</label>
+          <select id="asset" name="asset" required>
+            {% for a in proposal_assets %}
+              <option value="{{ a.asset }}">{{ a.asset }} (left {{ a.available_atomic|amt(a.asset) }})</option>
+            {% else %}
+              <option value="PDC">PDC</option>
+            {% endfor %}
+          </select>
+          <label for="amount">Milestone payout</label>
+          <input id="amount" name="amount" required placeholder="amount">
+          <p class="stat-sub">Hard fee model (from this proposal’s escrow only): PDC payout carves {{ transfer_fee_atomic|pdc }} PDC; BTCX payout sends full BTCX and debits {{ transfer_fee_atomic|pdc }} PDC escrow for L1 fee; BTC miner fee is subtracted from the BTC amount on-chain.</p>
           <label for="to_address">To address / @alias</label>
-          <input id="to_address" name="to_address" value="{{ proposal.payout_address }}" placeholder="defaults to proposal payout address">
+          <input id="to_address" name="to_address" value="" placeholder="leave empty → asset payout address">
+          <p class="stat-sub">Empty uses the payout address configured for the selected asset (not the PDC header).</p>
           <label for="milestone_note">Note</label>
           <input id="milestone_note" name="milestone_note" placeholder="Milestone 1">
-          <button class="btn" type="submit"{% if progress.available_atomic <= transfer_fee_atomic %} disabled{% endif %}>Pay out</button>
+          <button class="btn" type="submit">Pay out</button>
         </form>
       </div>
       {% endif %}

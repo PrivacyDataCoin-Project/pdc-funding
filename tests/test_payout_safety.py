@@ -51,7 +51,7 @@ class SlowWallet(WalletClient):
         self.release = threading.Event()
         self.calls = 0
 
-    def transfer(self, address: str, amount_atomic: int, comment: str = "") -> str:
+    def transfer(self, address: str, amount_atomic: int, comment: str = "", **kwargs) -> str:
         self.calls += 1
         self.started.set()
         assert self.release.wait(5)
@@ -66,7 +66,7 @@ class ScriptedWallet(WalletClient):
     def resolve_destination(self, address_or_alias: str) -> str:
         return address_or_alias.strip()
 
-    def transfer(self, address: str, amount_atomic: int, comment: str = "") -> str:
+    def transfer(self, address: str, amount_atomic: int, comment: str = "", **kwargs) -> str:
         raise self.exc
 
 

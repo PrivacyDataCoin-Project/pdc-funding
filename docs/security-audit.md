@@ -14,7 +14,7 @@ Status: **READY FOR REVIEW**. Not a production approval. Escrow remains custodia
 | F-4 | P0 | Fixed | The scan watermark advanced to `height - 20` even when a payment was still short of `DEPOSIT_MIN_CONFIRMATIONS`. The next query used that cursor minus 5. With a confirmation setting above that window, a not-yet-final payment was never queried again. |
 | F-5 | P0 | Fixed | Non-zero `unlock_time` was compared to chain height. Unix-time locks (values ≥ 500_000_000) are always above any realistic height, so those payments never matured after the timestamp passed. |
 | F-6 | P1 | Fixed | Confirmations used `height - block_height + 1`. For Zano `getinfo` (chain size) that is one confirmation early. The scanner now uses `height - block_height`, which never credits sooner than the old formula. |
-| F-7 | P1 | Fixed | Incoming `asset_id`, when the RPC sends it, was ignored. A non-PDC asset on the donation payment id could increase PDC escrow. Missing `asset_id` is still credited (see residual risk). |
+| F-7 | P1 | Fixed | Incoming `asset_id`, when the RPC sends it, was ignored. A non-PDC asset on the donation payment id could increase PDC escrow. Multi-asset now credits per ticker; empty `asset_id` is only accepted on PDC-only proposals (see F-24). |
 | F-8 | P1 | Fixed | Two overlapping address assignments could overwrite `payment_id` after the first integrated address was already handed out. Assignment is now a conditional update. |
 | F-9 | P1 | Fixed | `user_count() == 0` outside the insert could promote two concurrent first registrations to admin across processes. The check now runs inside `BEGIN IMMEDIATE`. |
 | F-10 | P1 | Fixed | `get_user` raised `KeyError` for a stale session id, so every later page returned 500. |
@@ -27,13 +27,13 @@ Status: **READY FOR REVIEW**. Not a production approval. Escrow remains custodia
 | F-17 | P2 | Fixed | Proposal body, payout note, and payout address had no upper bound. |
 | F-18 | P2 | Not changed | Custodial pooled wallet. Fees and outputs are not segregated per proposal. The operator key spends every donation. |
 | F-19 | P2 | Not changed | A reorg that removes a credited tx does not decrease `deposits`. Uniqueness prevents a second credit of the same tx id; a replaced tx id can credit again. |
-| F-20 | P2 | Not changed | Duplicate RPC rows for one `(tx_hash, payment_id)` keep the larger amount, not the sum. Summing would double-credit if the node repeats one output. Two real outputs in one tx can be under-counted. |
-| F-21 | P2 | Not changed | Status `completed` and `disabled` are not scanned. A donation that confirms only after that transition is invisible until an operator sets the watermark back and returns the proposal to `funding` or `wip`. |
+| F-20 | P2 | Partial | Dedup key is now `(tx_hash, payment_id, asset_id)` so PDC+BTCX legs in one tx are kept. Same-asset duplicate RPC rows still keep the larger amount, not the sum. |
+| F-21 | P2 | Partial | Status `completed` (4) is scanned again for L1+BTC so late donations credit while payouts remain allowed. `disabled` (0) is still not scanned. |
 | F-22 | P2 | Partial | TOTP 2FA on login/register. CSRF tokens on payout/status/comment/admin-user POSTs. Still no login rate limit. Cross-site POST cookies withheld by `SameSite=Lax`. |
 | F-27 | P0 | Fixed | Payout/status/user-admin required only `is_admin`. A forged or accidental second admin row could pay out. Now requires primary bootstrap username + `is_admin`. |
 | F-28 | P1 | Fixed | With `BOOTSTRAP_ADMIN_PASSWORD` set, public registration no longer auto-promotes the first user to admin. |
 | F-23 | P2 | Not changed | Session cookie is not `Secure`. Set a TLS terminator and a future `Secure` flag before exposing the app on the public internet. Placeholder secrets on loopback are still accepted for dry-run. |
-| F-24 | P2 | Not changed | If `get_bulk_payments` omits `asset_id`, the scanner cannot tell PDC from another asset. |
+| F-24 | P2 | Fixed | Empty `asset_id` on a PDC+BTCX proposal is skipped (no auto-PDC credit). PDC-only proposals still accept legacy payments without `asset_id`. |
 | F-25 | P2 | Not changed | The first registered user is admin when `users` is empty and no bootstrap password was set. That is the documented bootstrap path; only the double-admin race was fixed. |
 | F-26 | P2 | Not changed | `parse_amount` treats `1,5` as `1.5` and `1,000` as `1` (comma → dot). Pre-existing. |
 
@@ -42,7 +42,7 @@ Status: **READY FOR REVIEW**. Not a production approval. Escrow remains custodia
 - Payout UI shows `pending` until the wallet returns a tx id and the row is finalized. A pending row counts toward paid escrow.
 - Crediting waits for chain height. A dead daemon pauses credits; it does not post them.
 - The first live scan after this upgrade rewinds `deposit_scan_min_height` to `0` once. That can be a large `get_bulk_payments` call. Credits stay idempotent.
-- `python -m funding` exits if `BIND_HOST` is not loopback and `SECRET_KEY` is a known placeholder (`dev-only-change-me`, `change-me-to-a-long-random-string`, `changeme`, `secret`, `test`, `test-secret`).
+- `python -m funding` exits if `BIND_HOST` is not loopback and `SECRET_KEY` or `FUNDING_TOTP_KEK` is a known placeholder.
 
 ## Reconcile a pending payout
 

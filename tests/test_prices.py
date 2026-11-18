@@ -49,6 +49,22 @@ def test_public_bind_rejects_placeholder_secret(tmp_path: Path):
     )
 
 
+def test_public_bind_rejects_placeholder_totp_kek(tmp_path: Path):
+    from funding.__main__ import ensure_bind_allowed
+
+    settings = Settings(
+        secret_key="a-long-non-placeholder-secret-key-value",
+        funding_totp_kek="dev-only-funding-totp-kek-change-me",
+        database_path=tmp_path / "unused.db",
+        bind_host="0.0.0.0",
+    )
+    try:
+        ensure_bind_allowed(settings)
+        assert False
+    except SystemExit as exc:
+        assert "FUNDING_TOTP_KEK" in str(exc)
+
+
 def test_negative_confirmations_rejected(tmp_path: Path):
     try:
         Settings(
