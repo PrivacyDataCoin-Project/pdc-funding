@@ -536,6 +536,29 @@ class Database:
                 (status, proposal_id),
             )
 
+    def delete_proposal(self, proposal_id: int) -> bool:
+        """Remove a proposal and all related ledger/comment rows. Returns False if missing."""
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id FROM proposals WHERE id = ?", (proposal_id,)
+            ).fetchone()
+            if not row:
+                return False
+            # Break comment self-FK before deleting the thread.
+            conn.execute(
+                "UPDATE comments SET replied_to = NULL WHERE proposal_id = ?",
+                (proposal_id,),
+            )
+            conn.execute("DELETE FROM comments WHERE proposal_id = ?", (proposal_id,))
+            conn.execute("DELETE FROM deposits WHERE proposal_id = ?", (proposal_id,))
+            conn.execute("DELETE FROM payouts WHERE proposal_id = ?", (proposal_id,))
+            conn.execute(
+                "DELETE FROM proposal_assets WHERE proposal_id = ?", (proposal_id,)
+            )
+            cur = conn.execute("DELETE FROM proposals WHERE id = ?", (proposal_id,))
+            return cur.rowcount == 1
+
     def get_proposal(self, proposal_id: int) -> Optional[Proposal]:
         with self._lock, self._connect() as conn:
             return self._proposal_from_id(conn, proposal_id)

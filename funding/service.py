@@ -383,6 +383,44 @@ class FundingService:
             proposal = self.ensure_donation_address(proposal)
         return proposal
 
+    def delete_proposal(self, actor: User, proposal_id: int) -> None:
+        """Primary admin only. Blocks while any asset still has available escrow."""
+        self.require_primary_admin(actor)
+        proposal = self.db.get_proposal(proposal_id)
+        if not proposal:
+            raise KeyError("proposal not found")
+        assets = self.db.list_proposal_assets(proposal_id)
+        if assets:
+            for row in assets:
+                available = max(
+                    0, int(row.received_atomic) - int(row.paid_atomic)
+                )
+                if available > 0:
+                    raise ValueError(
+                        f"cannot delete: {row.asset} escrow still has "
+                        f"{format_amount_asset(available, row.asset)} available — "
+                        "pay out or wait until balance is zero"
+                    )
+                if int(row.pending_atomic) > 0:
+                    raise ValueError(
+                        f"cannot delete: {row.asset} has a pending payout reservation"
+                    )
+        else:
+            available = max(
+                0, int(proposal.received_atomic) - int(proposal.paid_atomic)
+            )
+            if available > 0:
+                raise ValueError(
+                    "cannot delete: proposal still has available escrow — "
+                    "pay out first"
+                )
+            if int(getattr(proposal, "pending_atomic", 0) or 0) > 0:
+                raise ValueError(
+                    "cannot delete: proposal has a pending payout reservation"
+                )
+        if not self.db.delete_proposal(proposal_id):
+            raise KeyError("proposal not found")
+
     def available_atomic(self, proposal: Proposal, asset: str = ASSET_PDC) -> int:
         row = self.db.get_proposal_asset(proposal.id, asset)
         if not row:

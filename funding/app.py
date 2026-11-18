@@ -569,6 +569,31 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             flash(request, str(exc), "error")
         return RedirectResponse(f"/proposals/{proposal_id}", status_code=303)
 
+    @app.post("/proposals/{proposal_id}/delete")
+    def proposal_delete(
+        request: Request,
+        proposal_id: int,
+        csrf_token: str = Form(""),
+    ):
+        user = current_user(request)
+        if not user:
+            return RedirectResponse("/login", status_code=303)
+        if not is_primary_admin(user):
+            raise HTTPException(403, "Only the admin account can delete proposals")
+        require_csrf(request, csrf_token)
+        try:
+            service.delete_proposal(user, proposal_id)
+            flash(request, f"Proposal #{proposal_id} deleted.", "ok")
+            return RedirectResponse("/", status_code=303)
+        except PermissionError:
+            raise HTTPException(403, "Admin only")
+        except KeyError:
+            flash(request, "Proposal not found.", "error")
+            return RedirectResponse("/", status_code=303)
+        except ValueError as exc:
+            flash(request, str(exc), "error")
+            return RedirectResponse(f"/proposals/{proposal_id}", status_code=303)
+
     @app.post("/proposals/{proposal_id}/comment")
     def proposal_comment(
         request: Request,

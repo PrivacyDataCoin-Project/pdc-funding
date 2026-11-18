@@ -166,6 +166,12 @@
           <input id="milestone_note" name="milestone_note" placeholder="Milestone 1">
           <button class="btn" type="submit">Pay out</button>
         </form>
+        <form method="post" action="/proposals/{{ proposal.id }}/delete" style="margin-top:1.25rem"
+              onsubmit="return confirm('Delete proposal #{{ proposal.id }} permanently? Only allowed when escrow available is zero.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <p class="stat-sub">Delete removes the proposal and its ledger/comments. Blocked while any asset still has available escrow.</p>
+          <button class="btn ghost danger" type="submit">Delete proposal</button>
+        </form>
       </div>
       {% endif %}
     </aside>

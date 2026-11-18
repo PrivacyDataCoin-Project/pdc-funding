@@ -498,6 +498,16 @@ input:focus, select:focus, textarea:focus {
   color: #fff;
 }
 
+.btn.ghost.danger {
+  border-color: #c44;
+  color: #f8c0c0;
+}
+.btn.ghost.danger:hover {
+  background: #a33;
+  border-color: #a33;
+  color: #fff;
+}
+
 .auth-box {
   max-width: 26rem;
   margin: 2rem auto 3rem;
